@@ -182,6 +182,70 @@ Response:
 ]
 ```
 
+### Ad-Hoc Command Execution
+
+Execute a one-time command on a specific agent.
+
+#### Execute Command
+```bash
+POST /api/exec
+Content-Type: application/json
+
+{
+  "agent_id": "workstation-001",
+  "command": "whoami",
+  "timeout_sec": 30,
+  "wait": true
+}
+```
+
+**Request Fields:**
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `agent_id` | Yes | | Target agent ID |
+| `command` | Yes | | Shell command to execute |
+| `timeout_sec` | No | 60 | Command timeout in seconds |
+| `wait` | No | false | If true, wait for result before responding |
+
+**Response (wait=true):**
+```json
+{
+  "id": "adhoc-abc123def456",
+  "agent_id": "workstation-001",
+  "command": "whoami",
+  "status": "completed",
+  "result": {
+    "agent_id": "workstation-001",
+    "command_id": "adhoc-abc123def456",
+    "command": "whoami",
+    "stdout": "root\n",
+    "stderr": "",
+    "return_code": 0,
+    "start_time": "2024-01-15T10:30:00Z",
+    "execution_time_sec": 0.015
+  }
+}
+```
+
+**Response (wait=false):**
+```json
+{
+  "id": "adhoc-abc123def456",
+  "agent_id": "workstation-001",
+  "command": "whoami",
+  "status": "sent"
+}
+```
+
+**Status Values:**
+| Status | Description |
+|--------|-------------|
+| `sent` | Command sent to agent (fire-and-forget mode) |
+| `pending` | Waiting for agent response |
+| `completed` | Command executed, result available |
+| `timeout` | Command timed out |
+| `error` | Error sending command or agent not connected |
+
 ### Files
 
 #### List Files
@@ -282,6 +346,37 @@ curl -X DELETE "$SERVER/api/commands?id=abc123" \
 # List connected agents
 curl "$SERVER/api/agents" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Execute ad-hoc command (fire and forget)
+curl -X POST "$SERVER/api/exec" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "workstation-001",
+    "command": "whoami"
+  }'
+
+# Execute ad-hoc command and wait for result
+curl -X POST "$SERVER/api/exec" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "workstation-001",
+    "command": "df -h",
+    "timeout_sec": 30,
+    "wait": true
+  }'
+
+# Execute command with longer timeout
+curl -X POST "$SERVER/api/exec" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "workstation-001",
+    "command": "apt-get update",
+    "timeout_sec": 300,
+    "wait": true
+  }'
 
 # Upload a script for sync
 curl -X POST "$SERVER/api/files" \

@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -25,34 +26,34 @@ import (
 
 // Command represents a scheduled command to run on agents
 type Command struct {
-	ID         string `json:"id"`
-	Command    string `json:"command"`
-	IntervalSec int   `json:"interval_sec"`
-	OS         string `json:"os"` // "linux", "windows", or "all"
-	CreatedAt  string `json:"created_at"`
+	ID          string `json:"id"`
+	Command     string `json:"command"`
+	IntervalSec int    `json:"interval_sec"`
+	OS          string `json:"os"` // "linux", "windows", or "all"
+	CreatedAt   string `json:"created_at"`
 }
 
 // CommandResult represents the result of a command execution
 type CommandResult struct {
-	AgentID       string `json:"agent_id"`
-	CommandID     string `json:"command_id"`
-	Command       string `json:"command"`
-	Stdout        string `json:"stdout"`
-	Stderr        string `json:"stderr"`
-	ReturnCode    int    `json:"return_code"`
-	StartTime     string `json:"start_time"`
+	AgentID       string  `json:"agent_id"`
+	CommandID     string  `json:"command_id"`
+	Command       string  `json:"command"`
+	Stdout        string  `json:"stdout"`
+	Stderr        string  `json:"stderr"`
+	ReturnCode    int     `json:"return_code"`
+	StartTime     string  `json:"start_time"`
 	ExecutionTime float64 `json:"execution_time_sec"`
 }
 
 // Agent represents a connected agent
 type Agent struct {
-	ID            string    `json:"id"`
-	OS            string    `json:"os"`
-	ConnectedAt   string    `json:"connected_at"`
-	LastSeen      string    `json:"last_seen"`
-	Connected     bool      `json:"connected"`
-	conn          *websocket.Conn
-	mu            sync.Mutex
+	ID          string `json:"id"`
+	OS          string `json:"os"`
+	ConnectedAt string `json:"connected_at"`
+	LastSeen    string `json:"last_seen"`
+	Connected   bool   `json:"connected"`
+	conn        *websocket.Conn
+	mu          sync.Mutex
 }
 
 // SyncFile represents a file available for sync
@@ -72,11 +73,11 @@ type ServerConfig struct {
 
 // LogRotationConfig holds log rotation settings
 type LogRotationConfig struct {
-	Enabled       bool   // Whether rotation is enabled
-	RotateDaily   bool   // Rotate at midnight UTC
-	MaxSizeMB     int    // Rotate when file exceeds this size (0 = no size limit)
-	MaxAgeDays    int    // Delete logs older than this (0 = keep forever)
-	MaxFiles      int    // Maximum number of rotated files to keep (0 = unlimited)
+	Enabled     bool // Whether rotation is enabled
+	RotateDaily bool // Rotate at midnight UTC
+	MaxSizeMB   int  // Rotate when file exceeds this size (0 = no size limit)
+	MaxAgeDays  int  // Delete logs older than this (0 = keep forever)
+	MaxFiles    int  // Maximum number of rotated files to keep (0 = unlimited)
 }
 
 // Message types for websocket communication
@@ -102,34 +103,69 @@ type FileDataPayload struct {
 	Data     string `json:"data"` // base64 encoded
 }
 
+// AdHocCommand represents a one-time command to run on a specific agent
+type AdHocCommand struct {
+	ID         string `json:"id"`
+	AgentID    string `json:"agent_id"`
+	Command    string `json:"command"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"` // Optional timeout (default 60s)
+}
+
+// AdHocCommandRequest is the API request for running an ad-hoc command
+type AdHocCommandRequest struct {
+	AgentID    string `json:"agent_id"`
+	Command    string `json:"command"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+	Wait       bool   `json:"wait,omitempty"` // If true, wait for result before responding
+}
+
+// AdHocCommandResponse is the API response for ad-hoc commands
+type AdHocCommandResponse struct {
+	ID      string         `json:"id"`
+	AgentID string         `json:"agent_id"`
+	Command string         `json:"command"`
+	Status  string         `json:"status"` // "pending", "completed", "timeout", "error"
+	Result  *CommandResult `json:"result,omitempty"`
+	Error   string         `json:"error,omitempty"`
+}
+
+// PendingAdHocCommand tracks an ad-hoc command waiting for results
+type PendingAdHocCommand struct {
+	Request    AdHocCommandRequest
+	ResultChan chan CommandResult
+	CreatedAt  time.Time
+}
+
 // Server state
 type Server struct {
-	config        ServerConfig
-	commands      map[string]Command
-	agents        map[string]*Agent
-	syncDir       string
-	dataDir       string
-	commandsMu    sync.RWMutex
-	agentsMu      sync.RWMutex
-	upgrader      websocket.Upgrader
-	resultLog     *os.File
-	resultLogMu   sync.Mutex
-	gzWriter      *gzip.Writer
-	logRotation   LogRotationConfig
-	currentLogDay int // Day of year for current log file
-	logStartTime  time.Time
+	config         ServerConfig
+	commands       map[string]Command
+	agents         map[string]*Agent
+	syncDir        string
+	dataDir        string
+	commandsMu     sync.RWMutex
+	agentsMu       sync.RWMutex
+	upgrader       websocket.Upgrader
+	resultLog      *os.File
+	resultLogMu    sync.Mutex
+	gzWriter       *gzip.Writer
+	logRotation    LogRotationConfig
+	currentLogDay  int // Day of year for current log file
+	logStartTime   time.Time
+	pendingAdHoc   map[string]*PendingAdHocCommand // Keyed by command ID
+	pendingAdHocMu sync.RWMutex
 }
 
 // Agent state
 type AgentState struct {
-	id           string
-	serverURL    string
-	agentToken   string
-	syncDir      string
-	lastRun      map[string]time.Time
-	lastRunMu    sync.Mutex
-	conn         *websocket.Conn
-	connMu       sync.Mutex
+	id         string
+	serverURL  string
+	agentToken string
+	syncDir    string
+	lastRun    map[string]time.Time
+	lastRunMu  sync.Mutex
+	conn       *websocket.Conn
+	connMu     sync.Mutex
 }
 
 func generateToken() string {
@@ -169,6 +205,7 @@ func NewServer(port int, dataDir string, adminToken, agentToken string, logRotat
 		},
 		commands:      make(map[string]Command),
 		agents:        make(map[string]*Agent),
+		pendingAdHoc:  make(map[string]*PendingAdHocCommand),
 		syncDir:       syncDir,
 		dataDir:       dataDir,
 		logRotation:   logRotation,
@@ -404,7 +441,7 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 		} else {
 			token = strings.TrimPrefix(token, "Bearer ")
 		}
-		
+
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.config.AdminToken)) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -538,11 +575,11 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "filename required", http.StatusBadRequest)
 			return
 		}
-		
+
 		// Sanitize filename to prevent directory traversal
 		filename = filepath.Base(filename)
 		filePath := filepath.Join(s.syncDir, filename)
-		
+
 		if err := os.Remove(filePath); err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "File not found", http.StatusNotFound)
@@ -551,7 +588,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		
+
 		s.broadcastFileList()
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"deleted": filename})
@@ -573,6 +610,136 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 	filePath := filepath.Join(s.syncDir, filename)
 
 	http.ServeFile(w, r, filePath)
+}
+
+func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AdHocCommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.AgentID == "" {
+		http.Error(w, "agent_id is required", http.StatusBadRequest)
+		return
+	}
+	if req.Command == "" {
+		http.Error(w, "command is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set default timeout
+	if req.TimeoutSec <= 0 {
+		req.TimeoutSec = 60
+	}
+
+	// Check if agent exists and is connected
+	s.agentsMu.RLock()
+	agent, exists := s.agents[req.AgentID]
+	s.agentsMu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	if !agent.Connected {
+		http.Error(w, "Agent not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Generate command ID
+	cmdID := "adhoc-" + generateToken()[:16]
+
+	// Create ad-hoc command
+	adHocCmd := AdHocCommand{
+		ID:         cmdID,
+		AgentID:    req.AgentID,
+		Command:    req.Command,
+		TimeoutSec: req.TimeoutSec,
+	}
+
+	response := AdHocCommandResponse{
+		ID:      cmdID,
+		AgentID: req.AgentID,
+		Command: req.Command,
+		Status:  "pending",
+	}
+
+	if req.Wait {
+		// Create pending command with result channel
+		resultChan := make(chan CommandResult, 1)
+		pending := &PendingAdHocCommand{
+			Request:    req,
+			ResultChan: resultChan,
+			CreatedAt:  time.Now(),
+		}
+
+		s.pendingAdHocMu.Lock()
+		s.pendingAdHoc[cmdID] = pending
+		s.pendingAdHocMu.Unlock()
+
+		// Clean up when done
+		defer func() {
+			s.pendingAdHocMu.Lock()
+			delete(s.pendingAdHoc, cmdID)
+			s.pendingAdHocMu.Unlock()
+			close(resultChan)
+		}()
+
+		// Send command to agent
+		if err := s.sendAdHocCommandToAgent(agent, adHocCmd); err != nil {
+			response.Status = "error"
+			response.Error = "Failed to send command: " + err.Error()
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Wait for result with timeout
+		select {
+		case result := <-resultChan:
+			response.Status = "completed"
+			response.Result = &result
+		case <-time.After(time.Duration(req.TimeoutSec) * time.Second):
+			response.Status = "timeout"
+			response.Error = fmt.Sprintf("Command timed out after %d seconds", req.TimeoutSec)
+		}
+	} else {
+		// Fire and forget
+		if err := s.sendAdHocCommandToAgent(agent, adHocCmd); err != nil {
+			response.Status = "error"
+			response.Error = "Failed to send command: " + err.Error()
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		response.Status = "sent"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) sendAdHocCommandToAgent(agent *Agent, cmd AdHocCommand) error {
+	payload, _ := json.Marshal(cmd)
+	msg := WSMessage{Type: "exec", Payload: payload}
+	data, _ := json.Marshal(msg)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+
+	if agent.conn == nil {
+		return fmt.Errorf("agent connection is nil")
+	}
+
+	return agent.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (s *Server) listSyncFiles() []SyncFile {
@@ -675,6 +842,19 @@ func (s *Server) handleAgentMessages(agent *Agent) {
 				result.AgentID = agent.ID
 				s.logResult(result)
 				log.Printf("Result from %s: command=%s, rc=%d", agent.ID, result.CommandID, result.ReturnCode)
+
+				// Check if this is a pending ad-hoc command
+				s.pendingAdHocMu.RLock()
+				pending, exists := s.pendingAdHoc[result.CommandID]
+				s.pendingAdHocMu.RUnlock()
+
+				if exists && pending.ResultChan != nil {
+					select {
+					case pending.ResultChan <- result:
+					default:
+						// Channel full or closed, ignore
+					}
+				}
 			}
 		case "file_request":
 			var req FileRequestPayload
@@ -765,6 +945,7 @@ func (s *Server) Run() {
 	mux.HandleFunc("/api/agents", s.adminAuth(s.handleAgents))
 	mux.HandleFunc("/api/files", s.adminAuth(s.handleFiles))
 	mux.HandleFunc("/api/files/download", s.adminAuth(s.handleFileDownload))
+	mux.HandleFunc("/api/exec", s.adminAuth(s.handleExec))
 
 	// Agent WebSocket endpoint
 	mux.HandleFunc("/ws/agent", s.handleAgentWS)
@@ -802,6 +983,7 @@ func (s *Server) Run() {
 	fmt.Println("  POST   /api/commands         - Add command")
 	fmt.Println("  DELETE /api/commands?id=X    - Delete command")
 	fmt.Println("  GET    /api/agents           - List agents")
+	fmt.Println("  POST   /api/exec             - Execute ad-hoc command")
 	fmt.Println("  GET    /api/files            - List sync files")
 	fmt.Println("  POST   /api/files            - Upload file")
 	fmt.Println("  DELETE /api/files?filename=X - Delete file")
@@ -936,6 +1118,14 @@ func (a *AgentState) handleMessages() {
 				log.Printf("Received %d commands", len(payload.Commands))
 			}
 
+		case "exec":
+			// Ad-hoc command execution
+			var adHocCmd AdHocCommand
+			if err := json.Unmarshal(msg.Payload, &adHocCmd); err == nil {
+				log.Printf("Received ad-hoc command: %s", adHocCmd.Command)
+				go a.executeAdHocCommand(adHocCmd)
+			}
+
 		case "files":
 			var payload SyncFileListPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err == nil {
@@ -1011,6 +1201,68 @@ func (a *AgentState) executeCommand(cmd Command) {
 	}
 
 	log.Printf("Executed: %s (rc=%d, time=%.2fs)", cmd.Command, returnCode, executionTime)
+	a.sendResult(result)
+}
+
+func (a *AgentState) executeAdHocCommand(cmd AdHocCommand) {
+	startTime := time.Now()
+	startTimeISO := startTime.UTC().Format(time.RFC3339)
+
+	var execCmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		execCmd = exec.Command("cmd", "/C", cmd.Command)
+	} else {
+		execCmd = exec.Command("sh", "-c", cmd.Command)
+	}
+
+	var stdout, stderr strings.Builder
+	execCmd.Stdout = &stdout
+	execCmd.Stderr = &stderr
+
+	// Create a context with timeout if specified
+	var err error
+	if cmd.TimeoutSec > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cmd.TimeoutSec)*time.Second)
+		defer cancel()
+
+		if runtime.GOOS == "windows" {
+			execCmd = exec.CommandContext(ctx, "cmd", "/C", cmd.Command)
+		} else {
+			execCmd = exec.CommandContext(ctx, "sh", "-c", cmd.Command)
+		}
+		execCmd.Stdout = &stdout
+		execCmd.Stderr = &stderr
+		err = execCmd.Run()
+	} else {
+		err = execCmd.Run()
+	}
+
+	executionTime := time.Since(startTime).Seconds()
+
+	returnCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			returnCode = exitErr.ExitCode()
+		} else {
+			returnCode = -1
+			// Add error info to stderr if it's not an exit error
+			if stderr.Len() == 0 {
+				stderr.WriteString(err.Error())
+			}
+		}
+	}
+
+	result := CommandResult{
+		CommandID:     cmd.ID,
+		Command:       cmd.Command,
+		Stdout:        stdout.String(),
+		Stderr:        stderr.String(),
+		ReturnCode:    returnCode,
+		StartTime:     startTimeISO,
+		ExecutionTime: executionTime,
+	}
+
+	log.Printf("Executed ad-hoc: %s (rc=%d, time=%.2fs)", cmd.Command, returnCode, executionTime)
 	a.sendResult(result)
 }
 
