@@ -57,6 +57,25 @@ Or explicitly:
 | `-admin-token` | (auto-generated) | Token for admin API authentication |
 | `-agent-token` | (auto-generated) | Token for agent authentication |
 
+**Log Rotation Options:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-log-rotate` | false | Enable log rotation |
+| `-log-rotate-daily` | true | Rotate logs at midnight UTC |
+| `-log-max-size-mb` | 100 | Rotate when log exceeds this size (0 = no limit) |
+| `-log-max-age-days` | 30 | Delete logs older than this (0 = keep forever) |
+| `-log-max-files` | 0 | Max rotated files to keep (0 = unlimited) |
+
+**Example with log rotation:**
+```bash
+./rikugan -server \
+  -log-rotate \
+  -log-rotate-daily \
+  -log-max-size-mb 50 \
+  -log-max-age-days 7 \
+  -log-max-files 10
+```
+
 ### Agent Mode
 
 ```bash
@@ -321,9 +340,11 @@ WantedBy=multi-user.target
 ### Server Data Directory Structure
 ```
 data/
-├── commands.json       # Persisted command definitions
-├── results.json.gz     # Compressed command execution logs
-└── sync/               # Files for agent synchronization
+├── commands.json                      # Persisted command definitions
+├── results.json.gz                    # Current compressed command execution logs
+├── results-2024-01-15T00-00-00.json.gz  # Rotated log (when rotation enabled)
+├── results-2024-01-14T00-00-00.json.gz  # Older rotated log
+└── sync/                              # Files for agent synchronization
     ├── install.sh
     └── setup.msi
 ```
@@ -339,8 +360,25 @@ Results are stored in `results.json.gz` as newline-delimited JSON:
 
 Read results with:
 ```bash
+# Current log
 zcat data/results.json.gz | jq .
+
+# All logs (including rotated)
+zcat data/results*.json.gz | jq .
+
+# Search across all logs
+zcat data/results*.json.gz | jq 'select(.agent_id == "workstation-001")'
 ```
+
+### Log Rotation
+
+When log rotation is enabled (`-log-rotate`), the server will:
+1. Rotate the current log at midnight UTC (if `-log-rotate-daily`)
+2. Rotate when the log exceeds the size limit (if `-log-max-size-mb > 0`)
+3. Delete old rotated logs based on age (if `-log-max-age-days > 0`)
+4. Keep only the most recent N rotated logs (if `-log-max-files > 0`)
+
+Rotated files are named with ISO 8601 timestamps: `results-YYYY-MM-DDTHH-MM-SS.json.gz`
 
 ## Security Considerations
 

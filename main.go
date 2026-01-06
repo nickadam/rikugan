@@ -70,6 +70,15 @@ type ServerConfig struct {
 	Port       int    `json:"port"`
 }
 
+// LogRotationConfig holds log rotation settings
+type LogRotationConfig struct {
+	Enabled       bool   // Whether rotation is enabled
+	RotateDaily   bool   // Rotate at midnight UTC
+	MaxSizeMB     int    // Rotate when file exceeds this size (0 = no size limit)
+	MaxAgeDays    int    // Delete logs older than this (0 = keep forever)
+	MaxFiles      int    // Maximum number of rotated files to keep (0 = unlimited)
+}
+
 // Message types for websocket communication
 type WSMessage struct {
 	Type    string          `json:"type"`
@@ -95,17 +104,20 @@ type FileDataPayload struct {
 
 // Server state
 type Server struct {
-	config      ServerConfig
-	commands    map[string]Command
-	agents      map[string]*Agent
-	syncDir     string
-	dataDir     string
-	commandsMu  sync.RWMutex
-	agentsMu    sync.RWMutex
-	upgrader    websocket.Upgrader
-	resultLog   *os.File
-	resultLogMu sync.Mutex
-	gzWriter    *gzip.Writer
+	config        ServerConfig
+	commands      map[string]Command
+	agents        map[string]*Agent
+	syncDir       string
+	dataDir       string
+	commandsMu    sync.RWMutex
+	agentsMu      sync.RWMutex
+	upgrader      websocket.Upgrader
+	resultLog     *os.File
+	resultLogMu   sync.Mutex
+	gzWriter      *gzip.Writer
+	logRotation   LogRotationConfig
+	currentLogDay int // Day of year for current log file
+	logStartTime  time.Time
 }
 
 // Agent state
@@ -136,7 +148,7 @@ func parseISO8601(s string) (time.Time, error) {
 
 // ==================== SERVER ====================
 
-func NewServer(port int, dataDir string, adminToken, agentToken string) *Server {
+func NewServer(port int, dataDir string, adminToken, agentToken string, logRotation LogRotationConfig) *Server {
 	if adminToken == "" {
 		adminToken = generateToken()
 	}
@@ -148,16 +160,20 @@ func NewServer(port int, dataDir string, adminToken, agentToken string) *Server 
 	os.MkdirAll(syncDir, 0755)
 	os.MkdirAll(dataDir, 0755)
 
+	now := time.Now().UTC()
 	s := &Server{
 		config: ServerConfig{
 			AdminToken: adminToken,
 			AgentToken: agentToken,
 			Port:       port,
 		},
-		commands: make(map[string]Command),
-		agents:   make(map[string]*Agent),
-		syncDir:  syncDir,
-		dataDir:  dataDir,
+		commands:      make(map[string]Command),
+		agents:        make(map[string]*Agent),
+		syncDir:       syncDir,
+		dataDir:       dataDir,
+		logRotation:   logRotation,
+		currentLogDay: now.YearDay(),
+		logStartTime:  now,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -165,6 +181,11 @@ func NewServer(port int, dataDir string, adminToken, agentToken string) *Server 
 
 	s.loadCommands()
 	s.openResultLog()
+
+	// Start log rotation checker if enabled
+	if logRotation.Enabled {
+		go s.logRotationLoop()
+	}
 
 	return s
 }
@@ -203,24 +224,176 @@ func (s *Server) saveCommands() error {
 }
 
 func (s *Server) openResultLog() {
-	path := filepath.Join(s.dataDir, "results.json.gz")
+	path := s.currentLogPath()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Fatalf("Failed to open result log: %v", err)
 	}
 	s.resultLog = f
 	s.gzWriter = gzip.NewWriter(f)
+	s.logStartTime = time.Now().UTC()
+	s.currentLogDay = time.Now().UTC().YearDay()
+}
+
+func (s *Server) currentLogPath() string {
+	return filepath.Join(s.dataDir, "results.json.gz")
+}
+
+func (s *Server) rotatedLogPath(t time.Time) string {
+	timestamp := t.Format("2006-01-02T15-04-05")
+	return filepath.Join(s.dataDir, fmt.Sprintf("results-%s.json.gz", timestamp))
 }
 
 func (s *Server) logResult(result CommandResult) {
 	s.resultLogMu.Lock()
 	defer s.resultLogMu.Unlock()
 
+	// Check if we need to rotate before writing
+	if s.shouldRotate() {
+		s.rotateLogLocked()
+	}
+
 	data, _ := json.Marshal(result)
 	s.gzWriter.Write(data)
 	s.gzWriter.Write([]byte("\n"))
 	s.gzWriter.Flush()
 	s.resultLog.Sync()
+}
+
+func (s *Server) shouldRotate() bool {
+	if !s.logRotation.Enabled {
+		return false
+	}
+
+	now := time.Now().UTC()
+
+	// Check daily rotation (at midnight UTC)
+	if s.logRotation.RotateDaily && now.YearDay() != s.currentLogDay {
+		return true
+	}
+
+	// Check size-based rotation
+	if s.logRotation.MaxSizeMB > 0 {
+		if info, err := s.resultLog.Stat(); err == nil {
+			maxBytes := int64(s.logRotation.MaxSizeMB) * 1024 * 1024
+			if info.Size() >= maxBytes {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (s *Server) rotateLogLocked() {
+	// Close current log
+	if s.gzWriter != nil {
+		s.gzWriter.Close()
+	}
+	if s.resultLog != nil {
+		s.resultLog.Close()
+	}
+
+	// Rename current log with timestamp
+	currentPath := s.currentLogPath()
+	if _, err := os.Stat(currentPath); err == nil {
+		rotatedPath := s.rotatedLogPath(s.logStartTime)
+		if err := os.Rename(currentPath, rotatedPath); err != nil {
+			log.Printf("Error rotating log: %v", err)
+		} else {
+			log.Printf("Rotated log to: %s", filepath.Base(rotatedPath))
+		}
+	}
+
+	// Open new log
+	s.openResultLog()
+
+	// Clean up old logs
+	s.cleanupOldLogs()
+}
+
+func (s *Server) cleanupOldLogs() {
+	if s.logRotation.MaxAgeDays <= 0 && s.logRotation.MaxFiles <= 0 {
+		return
+	}
+
+	entries, err := os.ReadDir(s.dataDir)
+	if err != nil {
+		return
+	}
+
+	type logFile struct {
+		name    string
+		modTime time.Time
+	}
+
+	var logFiles []logFile
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Match rotated log files: results-YYYY-MM-DDTHH-MM-SS.json.gz
+		if strings.HasPrefix(name, "results-") && strings.HasSuffix(name, ".json.gz") && name != "results.json.gz" {
+			if info, err := entry.Info(); err == nil {
+				logFiles = append(logFiles, logFile{name: name, modTime: info.ModTime()})
+			}
+		}
+	}
+
+	// Sort by modification time (oldest first)
+	for i := 0; i < len(logFiles)-1; i++ {
+		for j := i + 1; j < len(logFiles); j++ {
+			if logFiles[i].modTime.After(logFiles[j].modTime) {
+				logFiles[i], logFiles[j] = logFiles[j], logFiles[i]
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	deleted := 0
+
+	for i, lf := range logFiles {
+		shouldDelete := false
+
+		// Check age
+		if s.logRotation.MaxAgeDays > 0 {
+			age := now.Sub(lf.modTime)
+			if age > time.Duration(s.logRotation.MaxAgeDays)*24*time.Hour {
+				shouldDelete = true
+			}
+		}
+
+		// Check file count (keep newest MaxFiles)
+		if s.logRotation.MaxFiles > 0 {
+			filesRemaining := len(logFiles) - i - deleted
+			if filesRemaining > s.logRotation.MaxFiles {
+				shouldDelete = true
+			}
+		}
+
+		if shouldDelete {
+			path := filepath.Join(s.dataDir, lf.name)
+			if err := os.Remove(path); err == nil {
+				log.Printf("Deleted old log: %s", lf.name)
+				deleted++
+			}
+		}
+	}
+}
+
+func (s *Server) logRotationLoop() {
+	// Check every minute for rotation conditions
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.resultLogMu.Lock()
+		if s.shouldRotate() {
+			s.rotateLogLocked()
+		}
+		s.resultLogMu.Unlock()
+	}
 }
 
 func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -604,6 +777,25 @@ func (s *Server) Run() {
 	fmt.Printf("Agent Token: %s\n", s.config.AgentToken)
 	fmt.Printf("Data Directory: %s\n", s.dataDir)
 	fmt.Printf("Sync Directory: %s\n", s.syncDir)
+	fmt.Println("----------------------------------------")
+	fmt.Println("Log Rotation:")
+	if s.logRotation.Enabled {
+		fmt.Println("  Status: ENABLED")
+		if s.logRotation.RotateDaily {
+			fmt.Println("  Daily rotation: Yes (at midnight UTC)")
+		}
+		if s.logRotation.MaxSizeMB > 0 {
+			fmt.Printf("  Max size: %d MB\n", s.logRotation.MaxSizeMB)
+		}
+		if s.logRotation.MaxAgeDays > 0 {
+			fmt.Printf("  Max age: %d days\n", s.logRotation.MaxAgeDays)
+		}
+		if s.logRotation.MaxFiles > 0 {
+			fmt.Printf("  Max files: %d\n", s.logRotation.MaxFiles)
+		}
+	} else {
+		fmt.Println("  Status: DISABLED (use -log-rotate to enable)")
+	}
 	fmt.Println("========================================")
 	fmt.Println("API Endpoints (require admin_token):")
 	fmt.Println("  GET    /api/commands         - List commands")
@@ -903,6 +1095,13 @@ func main() {
 	adminToken := flag.String("admin-token", "", "Admin authentication token (auto-generated if empty)")
 	agentTokenFlag := flag.String("agent-token", "", "Agent authentication token (auto-generated if empty)")
 
+	// Log rotation flags
+	logRotate := flag.Bool("log-rotate", false, "Enable log rotation")
+	logRotateDaily := flag.Bool("log-rotate-daily", true, "Rotate logs daily at midnight UTC")
+	logMaxSizeMB := flag.Int("log-max-size-mb", 100, "Rotate when log exceeds this size in MB (0 = no size limit)")
+	logMaxAgeDays := flag.Int("log-max-age-days", 30, "Delete logs older than this many days (0 = keep forever)")
+	logMaxFiles := flag.Int("log-max-files", 0, "Maximum rotated log files to keep (0 = unlimited)")
+
 	// Agent flags
 	serverURL := flag.String("server-url", "", "Server URL for agent mode")
 	agentToken := flag.String("token", "", "Agent token for authentication")
@@ -917,7 +1116,14 @@ func main() {
 	}
 
 	if *serverMode {
-		server := NewServer(*port, *dataDir, *adminToken, *agentTokenFlag)
+		logRotation := LogRotationConfig{
+			Enabled:     *logRotate,
+			RotateDaily: *logRotateDaily,
+			MaxSizeMB:   *logMaxSizeMB,
+			MaxAgeDays:  *logMaxAgeDays,
+			MaxFiles:    *logMaxFiles,
+		}
+		server := NewServer(*port, *dataDir, *adminToken, *agentTokenFlag, logRotation)
 		server.Run()
 	} else if *agentMode {
 		if *serverURL == "" {
