@@ -90,8 +90,23 @@ Or explicitly:
 | `-agent` | | Run in agent mode |
 | `-server-url` | (required) | Server URL (http:// or https://) |
 | `-token` | (required) | Agent authentication token |
-| `-agent-id` | (hostname) | Unique agent identifier |
-| `-sync-dir` | ./agent_sync | Directory for synced files |
+| `-agent-id` | (auto-generated) | Unique agent identifier (see below) |
+| `-agent-data-dir` | ./agent_data | Base directory for agent data |
+
+**Agent Directory Structure:**
+```
+agent_data/
+├── state/
+│   └── .agent-id    # Persistent unique agent ID
+└── sync/
+    └── (synced files from server)
+```
+
+**Agent ID Generation:**
+- If `-agent-id` is not specified, a unique ID is auto-generated as `hostname-xxxxxxxx`
+- The ID is persisted in `<agent-data-dir>/state/.agent-id` and reused on restart
+- This ensures multiple agents with the same hostname get unique IDs
+- The server rejects duplicate connections with the same agent ID
 
 ## API Reference
 
@@ -246,6 +261,12 @@ Content-Type: application/json
 | `timeout` | Command timed out |
 | `error` | Error sending command or agent not connected |
 
+**Note on Windows Paths:**
+Backslashes in JSON must be escaped. To send `dir c:\Windows`:
+- In JSON body: `"command": "dir c:\\Windows"`
+- In curl with single quotes: use `\\\\` (shell escapes to `\\`, JSON decodes to `\`)
+- Alternative: Windows cmd.exe accepts forward slashes: `"command": "dir c:/Windows"`
+
 ### Files
 
 #### List Files
@@ -375,6 +396,27 @@ curl -X POST "$SERVER/api/exec" \
     "agent_id": "workstation-001",
     "command": "apt-get update",
     "timeout_sec": 300,
+    "wait": true
+  }'
+
+# Windows commands with paths - NOTE: backslashes must be escaped in JSON
+# Use \\\\ in shell (becomes \\ in JSON, which decodes to single \)
+curl -X POST "$SERVER/api/exec" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "workstation-001",
+    "command": "dir c:\\\\Windows\\\\System32",
+    "wait": true
+  }'
+
+# Alternative: use forward slashes (Windows cmd.exe accepts these)
+curl -X POST "$SERVER/api/exec" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "workstation-001",
+    "command": "dir c:/Windows/System32",
     "wait": true
   }'
 

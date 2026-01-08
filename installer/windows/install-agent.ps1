@@ -136,7 +136,7 @@ function Install-Agent {
     Write-Status "Source: $SourcePath"
     Write-Status "Install directory: $InstallDir"
     Write-Status "Server URL: $ServerUrl"
-    Write-Status "Agent ID: $(if ($AgentId) { $AgentId } else { '(hostname)' })"
+    Write-Status "Agent ID: $(if ($AgentId) { $AgentId } else { '(auto-generated)' })"
 
     # Stop existing service
     Stop-AgentService
@@ -148,9 +148,15 @@ function Install-Agent {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
 
-    # Create subdirectories
-    $syncDir = Join-Path $InstallDir "sync"
+    # Create subdirectories (agent_data with state and sync)
+    $agentDataDir = Join-Path $InstallDir "agent_data"
+    $stateDir = Join-Path $agentDataDir "state"
+    $syncDir = Join-Path $agentDataDir "sync"
     $logsDir = Join-Path $InstallDir "logs"
+
+    if (-not (Test-Path $stateDir)) {
+        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+    }
     if (-not (Test-Path $syncDir)) {
         New-Item -ItemType Directory -Path $syncDir -Force | Out-Null
     }
@@ -164,7 +170,7 @@ function Install-Agent {
     Copy-Item -Path $SourcePath -Destination $exePath -Force
 
     # Build service arguments
-    $serviceArgs = "-agent -server-url `"$ServerUrl`" -token `"$AgentToken`" -sync-dir `"$syncDir`""
+    $serviceArgs = "-agent -server-url `"$ServerUrl`" -token `"$AgentToken`" -agent-data-dir `"$agentDataDir`""
     if (-not [string]::IsNullOrEmpty($AgentId)) {
         $serviceArgs += " -agent-id `"$AgentId`""
     }
@@ -172,7 +178,7 @@ function Install-Agent {
     # Create the service
     Write-Status "Creating Windows service..."
     $binPath = "`"$exePath`" $serviceArgs"
-    
+
     # Use sc.exe to create service with proper quoting
     $scArgs = @(
         "create", $ServiceName,
@@ -181,7 +187,7 @@ function Install-Agent {
         "start=", "auto",
         "obj=", "LocalSystem"
     )
-    
+
     & sc.exe create $ServiceName binPath= $binPath DisplayName= $ServiceDisplayName start= auto obj= LocalSystem
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create service"
@@ -214,9 +220,11 @@ Rikugan Agent Installation
 =================================
 Installed: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Server URL: $ServerUrl
-Agent ID: $(if ($AgentId) { $AgentId } else { "(hostname)" })
+Agent ID: $(if ($AgentId) { $AgentId } else { "(auto-generated)" })
 Install Directory: $InstallDir
-Sync Directory: $syncDir
+Agent Data Directory: $agentDataDir
+  State: $stateDir
+  Sync:  $syncDir
 
 Service Name: $ServiceName
 Service Status: $($service.Status)
@@ -259,10 +267,10 @@ function Uninstall-Agent {
     # Remove installation directory
     if (Test-Path $InstallDir) {
         Write-Status "Removing installation directory..."
-        
+
         # Give time for service to fully stop and release files
         Start-Sleep -Seconds 2
-        
+
         try {
             Remove-Item -Path $InstallDir -Recurse -Force
             Write-Success "Installation directory removed"

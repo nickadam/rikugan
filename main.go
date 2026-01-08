@@ -161,7 +161,9 @@ type AgentState struct {
 	id         string
 	serverURL  string
 	agentToken string
-	syncDir    string
+	dataDir    string // Base directory for agent data
+	stateDir   string // Directory for agent state (ID, last run times)
+	syncDir    string // Directory for synced files
 	lastRun    map[string]time.Time
 	lastRunMu  sync.Mutex
 	conn       *websocket.Conn
@@ -780,6 +782,17 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for existing connected agent with same ID
+	s.agentsMu.RLock()
+	existingAgent, exists := s.agents[agentID]
+	s.agentsMu.RUnlock()
+
+	if exists && existingAgent.Connected {
+		log.Printf("Rejecting duplicate agent connection: %s (already connected)", agentID)
+		http.Error(w, "Agent ID already connected. Use -agent-id to specify a unique ID.", http.StatusConflict)
+		return
+	}
+
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Upgrade error: %v", err)
@@ -997,25 +1010,62 @@ func (s *Server) Run() {
 
 // ==================== AGENT ====================
 
-func NewAgent(serverURL, agentToken, agentID, syncDir string) *AgentState {
-	if agentID == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			agentID = "unknown"
-		} else {
-			agentID = hostname
+// getOrCreateAgentID returns a persistent unique agent ID.
+// Format: hostname-uuid (e.g., "workstation-a1b2c3d4")
+// The UUID is stored in a file to persist across restarts.
+func getOrCreateAgentID(dataDir string) string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+
+	// Ensure data directory exists
+	os.MkdirAll(dataDir, 0755)
+
+	idFile := filepath.Join(dataDir, ".agent-id")
+
+	// Try to read existing ID
+	if data, err := os.ReadFile(idFile); err == nil {
+		existingID := strings.TrimSpace(string(data))
+		if existingID != "" {
+			return existingID
 		}
 	}
 
-	if syncDir == "" {
-		syncDir = "./agent_sync"
+	// Generate new ID: hostname-shortUUID
+	uuid := generateToken()[:8]
+	agentID := fmt.Sprintf("%s-%s", hostname, uuid)
+
+	// Persist the ID
+	if err := os.WriteFile(idFile, []byte(agentID), 0644); err != nil {
+		log.Printf("Warning: could not persist agent ID: %v", err)
 	}
+
+	return agentID
+}
+
+func NewAgent(serverURL, agentToken, agentID, dataDir string) *AgentState {
+	if dataDir == "" {
+		dataDir = "./agent_data"
+	}
+
+	// Create directory structure
+	stateDir := filepath.Join(dataDir, "state")
+	syncDir := filepath.Join(dataDir, "sync")
+	os.MkdirAll(stateDir, 0755)
 	os.MkdirAll(syncDir, 0755)
+
+	// If no agent ID specified, generate/load a persistent one
+	if agentID == "" {
+		agentID = getOrCreateAgentID(stateDir)
+	}
 
 	return &AgentState{
 		id:         agentID,
 		serverURL:  serverURL,
 		agentToken: agentToken,
+		dataDir:    dataDir,
+		stateDir:   stateDir,
 		syncDir:    syncDir,
 		lastRun:    make(map[string]time.Time),
 	}
@@ -1049,7 +1099,10 @@ func (a *AgentState) Run() {
 	fmt.Printf("Agent ID: %s\n", a.id)
 	fmt.Printf("OS: %s\n", runtime.GOOS)
 	fmt.Printf("Server: %s\n", a.serverURL)
-	fmt.Printf("Sync Directory: %s\n", a.syncDir)
+	fmt.Println("----------------------------------------")
+	fmt.Printf("Data Directory: %s\n", a.dataDir)
+	fmt.Printf("  State: %s\n", a.stateDir)
+	fmt.Printf("  Sync:  %s\n", a.syncDir)
 	fmt.Println("========================================")
 
 	for {
@@ -1167,11 +1220,17 @@ func (a *AgentState) executeCommand(cmd Command) {
 	startTime := time.Now()
 	startTimeISO := startTime.UTC().Format(time.RFC3339)
 
+	// Trim any whitespace from the command
+	cmdStr := strings.TrimSpace(cmd.Command)
+
 	var execCmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		execCmd = exec.Command("cmd", "/C", cmd.Command)
+		// Append a no-op to handle trailing backslashes which cmd.exe
+		// interprets as escape characters
+		cmdStr = cmdStr + " && cd ."
+		execCmd = exec.Command("cmd", "/C", cmdStr)
 	} else {
-		execCmd = exec.Command("sh", "-c", cmd.Command)
+		execCmd = exec.Command("sh", "-c", cmdStr)
 	}
 
 	var stdout, stderr strings.Builder
@@ -1208,35 +1267,35 @@ func (a *AgentState) executeAdHocCommand(cmd AdHocCommand) {
 	startTime := time.Now()
 	startTimeISO := startTime.UTC().Format(time.RFC3339)
 
-	var execCmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		execCmd = exec.Command("cmd", "/C", cmd.Command)
-	} else {
-		execCmd = exec.Command("sh", "-c", cmd.Command)
-	}
+	// Trim any whitespace from the command
+	cmdStr := strings.TrimSpace(cmd.Command)
 
 	var stdout, stderr strings.Builder
+	var execCmd *exec.Cmd
+	var err error
+
+	// Default timeout to 60 seconds if not specified
+	timeout := cmd.TimeoutSec
+	if timeout <= 0 {
+		timeout = 60
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	if runtime.GOOS == "windows" {
+		// Append a no-op to handle trailing backslashes which cmd.exe
+		// interprets as escape characters
+		cmdStr = cmdStr + " && cd ."
+		execCmd = exec.CommandContext(ctx, "cmd", "/C", cmdStr)
+	} else {
+		execCmd = exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	}
 	execCmd.Stdout = &stdout
 	execCmd.Stderr = &stderr
 
-	// Create a context with timeout if specified
-	var err error
-	if cmd.TimeoutSec > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cmd.TimeoutSec)*time.Second)
-		defer cancel()
-
-		if runtime.GOOS == "windows" {
-			execCmd = exec.CommandContext(ctx, "cmd", "/C", cmd.Command)
-		} else {
-			execCmd = exec.CommandContext(ctx, "sh", "-c", cmd.Command)
-		}
-		execCmd.Stdout = &stdout
-		execCmd.Stderr = &stderr
-		err = execCmd.Run()
-	} else {
-		err = execCmd.Run()
-	}
-
+	log.Printf("Executing ad-hoc command: [%s]", cmdStr)
+	err = execCmd.Run()
 	executionTime := time.Since(startTime).Seconds()
 
 	returnCode := 0
@@ -1357,8 +1416,8 @@ func main() {
 	// Agent flags
 	serverURL := flag.String("server-url", "", "Server URL for agent mode")
 	agentToken := flag.String("token", "", "Agent token for authentication")
-	agentID := flag.String("agent-id", "", "Agent ID (defaults to hostname)")
-	syncDir := flag.String("sync-dir", "./agent_sync", "Agent sync directory")
+	agentID := flag.String("agent-id", "", "Agent ID (defaults to hostname-uuid)")
+	agentDataDir := flag.String("agent-data-dir", "./agent_data", "Agent data directory (contains state/ and sync/)")
 
 	flag.Parse()
 
@@ -1384,7 +1443,7 @@ func main() {
 		if *agentToken == "" {
 			log.Fatal("--token is required for agent mode")
 		}
-		agent := NewAgent(*serverURL, *agentToken, *agentID, *syncDir)
+		agent := NewAgent(*serverURL, *agentToken, *agentID, *agentDataDir)
 		agent.Run()
 	}
 }

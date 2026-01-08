@@ -102,7 +102,7 @@ msiexec /i Rikugan-1.0.0-x64.msi /qn ^
 
 Create a transform (.mst) file or use command-line properties:
 - `SERVER_URL` - Rikugan server URL
-- `AGENT_TOKEN` - Agent authentication token  
+- `AGENT_TOKEN` - Agent authentication token
 - `AGENT_ID` - Custom agent identifier (optional)
 
 ### Uninstalling
@@ -133,21 +133,21 @@ $installerPath = "\\fileserver\share\rikugan"
 
 foreach ($server in $servers) {
     Write-Host "Deploying to $server..."
-    
+
     Invoke-Command -ComputerName $server -ScriptBlock {
         param($url, $token, $path, $name)
-        
+
         # Copy files
         Copy-Item "$path\rikugan.exe" "C:\Temp\" -Force
         Copy-Item "$path\install-agent.ps1" "C:\Temp\" -Force
-        
+
         # Install
         & "C:\Temp\install-agent.ps1" -ServerUrl $url -AgentToken $token -AgentId $name
-        
+
         # Cleanup
         Remove-Item "C:\Temp\rikugan.exe" -Force
         Remove-Item "C:\Temp\install-agent.ps1" -Force
-        
+
     } -ArgumentList $serverUrl, $agentToken, $installerPath, $server
 }
 ```
