@@ -1443,6 +1443,14 @@ func main() {
 		if *agentToken == "" {
 			log.Fatal("--token is required for agent mode")
 		}
+
+		// Check if running as Windows service
+		if isWindowsService() {
+			runService("RikuganAgent", *serverURL, *agentToken, *agentID, *agentDataDir)
+			return
+		}
+
+		// Running interactively
 		agent := NewAgent(*serverURL, *agentToken, *agentID, *agentDataDir)
 		agent.Run()
 	}
