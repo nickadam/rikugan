@@ -1045,6 +1045,12 @@ func getOrCreateAgentID(dataDir string) string {
 }
 
 func NewAgent(serverURL, agentToken, agentID, dataDir string) *AgentState {
+	// Clean up the data directory path
+	// Remove trailing slashes/backslashes and any quote characters that might
+	// have been included due to Windows command-line escaping issues
+	dataDir = strings.TrimSpace(dataDir)
+	dataDir = strings.TrimRight(dataDir, `/\"'`)
+
 	if dataDir == "" {
 		dataDir = "./agent_data"
 	}
@@ -1055,9 +1061,24 @@ func NewAgent(serverURL, agentToken, agentID, dataDir string) *AgentState {
 	os.MkdirAll(stateDir, 0755)
 	os.MkdirAll(syncDir, 0755)
 
-	// If no agent ID specified, generate/load a persistent one
+	// Trim whitespace from agent ID
+	agentID = strings.TrimSpace(agentID)
+
+	// If no agent ID specified (empty or whitespace), generate/load a persistent one
 	if agentID == "" {
 		agentID = getOrCreateAgentID(stateDir)
+	} else {
+		// If agent ID was explicitly provided, save it to the state file
+		// so it persists even if the service args change later
+		idFile := filepath.Join(stateDir, ".agent-id")
+		existingID := ""
+		if data, err := os.ReadFile(idFile); err == nil {
+			existingID = strings.TrimSpace(string(data))
+		}
+		// Only write if different (avoid unnecessary writes)
+		if existingID != agentID {
+			os.WriteFile(idFile, []byte(agentID), 0644)
+		}
 	}
 
 	return &AgentState{
