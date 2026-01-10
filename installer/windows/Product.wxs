@@ -4,8 +4,8 @@
 
   <?define ProductName = "Rikugan" ?>
   <?define ProductVersion = "1.0.0" ?>
-  <?define ProductManufacturer = "Your Company" ?>
-  <?define UpgradeCode = "12345678-1234-1234-1234-123456789ABC" ?>
+  <?define ProductManufacturer = "Nick Vissari" ?>
+  <?define UpgradeCode = "736D0C70-C780-4F21-9134-57C05B52D112" ?>
 
   <Product Id="*"
            Name="$(var.ProductName)"
@@ -24,40 +24,113 @@
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Properties for configuration -->
-    <Property Id="SERVER_URL" Value="" />
-    <Property Id="AGENT_TOKEN" Value="" />
-    <Property Id="AGENT_ID" Value="" />
-    
+    <Property Id="SERVER_URL" Value="https://example.com" />
+    <Property Id="AGENT_TOKEN" Value="your_agent_token" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
     <!-- Features -->
     <Feature Id="ProductFeature" Title="Rikugan Agent" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="DataFolderComponents" />
       <ComponentGroupRef Id="ServiceComponents" />
     </Feature>
 
-    <!-- UI for collecting server URL and token -->
-    <UI>
-      <UIRef Id="WixUI_Mondo" />
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="StartService">INSTALLED</Publish>
+    <!-- Custom UI with configuration dialog -->
+    <UI Id="CustomInstallUI">
+      <UIRef Id="WixUI_Common" />
+
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+      <Property Id="WixUI_Mode" Value="InstallDir" />
+
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <!-- Dialog flow -->
+      <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath" Order="3">1</Publish>
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4"><![CDATA[WIXUI_INSTALLDIR_VALID<>"1"]]></Publish>
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999">1</Publish>
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg">NOT Installed</Publish>
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg">Installed AND PATCH</Publish>
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1">1</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath" Order="2">NOT WIXUI_DONTVALIDATEPATH</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3"><![CDATA[NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID<>"1"]]></Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ServerConfigDlg" Order="4">WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID="1"</Publish>
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1">1</Publish>
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2">1</Publish>
+
+      <Publish Dialog="ServerConfigDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg">1</Publish>
+      <Publish Dialog="ServerConfigDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ServerConfigDlg" Order="1">NOT Installed</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2">Installed AND NOT PATCH</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2">Installed AND PATCH</Publish>
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg">1</Publish>
+
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg">1</Publish>
     </UI>
 
-    <!-- Custom action to start service after install -->
-    <CustomAction Id="StartService"
-                  Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]sc.exe start RikuganAgent"
-                  Execute="deferred"
-                  Return="ignore"
-                  Impersonate="no" />
+    <!-- Custom dialog for server configuration -->
+    <UI>
+      <Dialog Id="ServerConfigDlg" Width="370" Height="270" Title="!(loc.InstallDirDlg_Title)">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Server Configuration" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Enter the Rikugan server connection details." />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 
-    <InstallExecuteSequence>
-      <Custom Action="StartService" After="StartServices">NOT Installed</Custom>
-    </InstallExecuteSequence>
+        <Control Id="ServerURLLabel" Type="Text" X="20" Y="60" Width="100" Height="15" NoPrefix="yes" Text="Server URL:" />
+        <Control Id="ServerURLEdit" Type="Edit" X="20" Y="75" Width="330" Height="18" Property="SERVER_URL" Text="{200}" />
+        <Control Id="ServerURLHelp" Type="Text" X="20" Y="95" Width="330" Height="15" NoPrefix="yes" Text="Example: http://server.example.com:8080" />
+
+        <Control Id="AgentTokenLabel" Type="Text" X="20" Y="120" Width="100" Height="15" NoPrefix="yes" Text="Agent Token:" />
+        <Control Id="AgentTokenEdit" Type="Edit" X="20" Y="135" Width="330" Height="18" Property="AGENT_TOKEN" Text="{200}" />
+        <Control Id="AgentTokenHelp" Type="Text" X="20" Y="155" Width="330" Height="15" NoPrefix="yes" Text="The authentication token from your Rikugan server." />
+
+        <Control Id="AgentIDLabel" Type="Text" X="20" Y="180" Width="100" Height="15" NoPrefix="yes" Text="Agent ID (optional):" />
+        <Control Id="AgentIDEdit" Type="Edit" X="20" Y="195" Width="330" Height="18" Property="AGENT_ID" Text="{100}" />
+        <Control Id="AgentIDHelp" Type="Text" X="20" Y="215" Width="330" Height="15" NoPrefix="yes" Text="Leave blank to auto-generate a unique ID." />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+
+    <UIRef Id="WixUI_ErrorProgressText" />
 
   </Product>
 
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- Executable in Program Files -->
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="Rikugan">
+        <Directory Id="INSTALLFOLDER" Name="Rikugan" />
+      </Directory>
+      <!-- Data in ProgramData -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="DATAFOLDER" Name="Rikugan">
+          <Directory Id="STATEFOLDER" Name="state" />
           <Directory Id="SYNCFOLDER" Name="sync" />
           <Directory Id="LOGSFOLDER" Name="logs" />
         </Directory>
@@ -72,19 +145,19 @@
               Source="$(var.BuildDir)\rikugan.exe"
               KeyPath="yes" />
       </Component>
-      
-      <Component Id="ConfigFile" Guid="22222222-2222-2222-2222-222222222222" Win64="yes">
-        <File Id="ConfigYaml"
-              Source="$(var.BuildDir)\agent-config.yaml"
-              KeyPath="yes" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="DataFolderComponents">
+      <Component Id="StateFolder" Guid="33333333-3333-3333-3333-333333333333" Win64="yes" Directory="STATEFOLDER">
+        <CreateFolder />
       </Component>
-      
-      <Component Id="SyncFolder" Guid="33333333-3333-3333-3333-333333333333" Win64="yes">
-        <CreateFolder Directory="SYNCFOLDER" />
+
+      <Component Id="SyncFolder" Guid="44444444-4444-4444-4444-444444444444" Win64="yes" Directory="SYNCFOLDER">
+        <CreateFolder />
       </Component>
-      
-      <Component Id="LogsFolder" Guid="44444444-4444-4444-4444-444444444444" Win64="yes">
-        <CreateFolder Directory="LOGSFOLDER" />
+
+      <Component Id="LogsFolder" Guid="66666666-6666-6666-6666-666666666666" Win64="yes" Directory="LOGSFOLDER">
+        <CreateFolder />
       </Component>
     </ComponentGroup>
 
@@ -94,7 +167,7 @@
               Source="$(var.BuildDir)\rikugan.exe"
               KeyPath="yes"
               Name="rikugan-svc.exe" />
-        
+
         <ServiceInstall Id="ServiceInstaller"
                         Type="ownProcess"
                         Name="RikuganAgent"
@@ -103,10 +176,10 @@
                         Start="auto"
                         Account="LocalSystem"
                         ErrorControl="normal"
-                        Arguments="-agent -server-url &quot;[SERVER_URL]&quot; -token &quot;[AGENT_TOKEN]&quot; -agent-id &quot;[AGENT_ID]&quot; -sync-dir &quot;[INSTALLFOLDER]sync&quot;">
+                        Arguments="-agent -server-url &quot;[SERVER_URL]&quot; -token &quot;[AGENT_TOKEN]&quot; -agent-data-dir &quot;[DATAFOLDER]&quot;">
           <ServiceDependency Id="Tcpip" />
         </ServiceInstall>
-        
+
         <ServiceControl Id="StartService"
                         Start="install"
                         Stop="both"

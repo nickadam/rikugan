@@ -162,8 +162,26 @@ foreach ($server in $servers) {
 | Display Name | `Rikugan Agent` |
 | Startup Type | Automatic |
 | Run As | Local System |
-| Install Location | `C:\Program Files\Rikugan\` |
-| Sync Directory | `C:\Program Files\Rikugan\sync\` |
+| Executable | `C:\Program Files\Rikugan\rikugan.exe` |
+| Data Directory | `C:\ProgramData\Rikugan\` |
+| State Directory | `C:\ProgramData\Rikugan\state\` |
+| Sync Directory | `C:\ProgramData\Rikugan\sync\` |
+| Logs Directory | `C:\ProgramData\Rikugan\logs\` |
+
+### Directory Structure
+
+```
+C:\Program Files\Rikugan\          # Executable location
+└── rikugan.exe
+└── install-config.txt             # Installation details
+
+C:\ProgramData\Rikugan\            # Data location (persists across updates)
+├── state\
+│   └── .agent-id                  # Persistent agent identifier
+├── sync\
+│   └── (synced files from server)
+└── logs\
+```
 
 ### Service Recovery
 

@@ -142,18 +142,20 @@ function Install-Agent {
     Stop-AgentService
     Remove-AgentService
 
-    # Create installation directory
+    # Create installation directory (for executable)
     Write-Status "Creating installation directory..."
     if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
 
-    # Create subdirectories (agent_data with state and sync)
-    $agentDataDir = Join-Path $InstallDir "agent_data"
+    # Create data directory in ProgramData (for state and sync)
+    # ProgramData is the correct location for service data on Windows
+    $agentDataDir = Join-Path $env:ProgramData "Rikugan"
     $stateDir = Join-Path $agentDataDir "state"
     $syncDir = Join-Path $agentDataDir "sync"
-    $logsDir = Join-Path $InstallDir "logs"
+    $logsDir = Join-Path $agentDataDir "logs"
 
+    Write-Status "Creating data directory: $agentDataDir"
     if (-not (Test-Path $stateDir)) {
         New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     }
@@ -221,10 +223,12 @@ Rikugan Agent Installation
 Installed: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Server URL: $ServerUrl
 Agent ID: $(if ($AgentId) { $AgentId } else { "(auto-generated)" })
-Install Directory: $InstallDir
-Agent Data Directory: $agentDataDir
+
+Executable: $exePath
+Data Directory: $agentDataDir
   State: $stateDir
   Sync:  $syncDir
+  Logs:  $logsDir
 
 Service Name: $ServiceName
 Service Status: $($service.Status)
@@ -243,7 +247,8 @@ To uninstall:
     Write-Success "Installation complete!"
     Write-Host ""
     Write-Host "Service status: $($service.Status)" -ForegroundColor White
-    Write-Host "Install directory: $InstallDir" -ForegroundColor White
+    Write-Host "Executable: $exePath" -ForegroundColor White
+    Write-Host "Data directory: $agentDataDir" -ForegroundColor White
     Write-Host "Configuration saved to: $configPath" -ForegroundColor White
     Write-Host ""
 }
@@ -264,18 +269,29 @@ function Uninstall-Agent {
     Stop-AgentService
     Remove-AgentService
 
-    # Remove installation directory
+    # Give time for service to fully stop and release files
+    Start-Sleep -Seconds 2
+
+    # Remove installation directory (executable)
     if (Test-Path $InstallDir) {
         Write-Status "Removing installation directory..."
-
-        # Give time for service to fully stop and release files
-        Start-Sleep -Seconds 2
-
         try {
             Remove-Item -Path $InstallDir -Recurse -Force
-            Write-Success "Installation directory removed"
+            Write-Success "Installation directory removed: $InstallDir"
         } catch {
             Write-Error "Could not remove all files. You may need to manually delete: $InstallDir"
+        }
+    }
+
+    # Remove data directory from ProgramData
+    $agentDataDir = Join-Path $env:ProgramData "Rikugan"
+    if (Test-Path $agentDataDir) {
+        Write-Status "Removing data directory..."
+        try {
+            Remove-Item -Path $agentDataDir -Recurse -Force
+            Write-Success "Data directory removed: $agentDataDir"
+        } catch {
+            Write-Error "Could not remove data directory. You may need to manually delete: $agentDataDir"
         }
     }
 
