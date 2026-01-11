@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
@@ -28,8 +29,16 @@ func (m *rikuganService) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
 
+	// Clean up the data directory path - remove trailing slashes and quotes
+	// that can occur from Windows command-line escaping issues
+	dataDir := strings.TrimSpace(m.agentDataDir)
+	dataDir = strings.TrimRight(dataDir, `/\"'`)
+	if dataDir == "" {
+		dataDir = "C:\\ProgramData\\Rikugan"
+	}
+
 	// Set up logging to file since we can't use stdout as a service
-	logDir := filepath.Join(m.agentDataDir, "logs")
+	logDir := filepath.Join(dataDir, "logs")
 	os.MkdirAll(logDir, 0755)
 	logFile, err := os.OpenFile(
 		filepath.Join(logDir, "agent.log"),
@@ -43,9 +52,10 @@ func (m *rikuganService) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	elog.Info(1, fmt.Sprintf("Starting Rikugan agent service, connecting to %s", m.serverURL))
 	log.Printf("Starting Rikugan agent service, connecting to %s", m.serverURL)
+	log.Printf("Data directory: %s", dataDir)
 
-	// Create and start agent
-	agent := NewAgent(m.serverURL, m.agentToken, m.agentID, m.agentDataDir)
+	// Create and start agent (pass cleaned dataDir)
+	agent := NewAgent(m.serverURL, m.agentToken, m.agentID, dataDir)
 
 	// Run agent in background
 	done := make(chan struct{})
