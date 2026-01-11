@@ -25,6 +25,35 @@ type rikuganService struct {
 	agentDataDir string
 }
 
+// openLogFile opens or rotates the log file. Returns the file and current month.
+func openLogFile(logDir string) (*os.File, int) {
+	os.MkdirAll(logDir, 0755)
+
+	logPath := filepath.Join(logDir, "agent.log")
+	currentMonth := time.Now().Month()
+
+	// Check if we need to rotate (file exists and is from a different month)
+	if info, err := os.Stat(logPath); err == nil {
+		if info.ModTime().Month() != currentMonth {
+			// Rotate the old log
+			rotatedName := fmt.Sprintf("agent-%s.log", info.ModTime().Format("2006-01"))
+			rotatedPath := filepath.Join(logDir, rotatedName)
+			os.Rename(logPath, rotatedPath)
+		}
+	}
+
+	logFile, err := os.OpenFile(
+		logPath,
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0644,
+	)
+	if err != nil {
+		return nil, int(currentMonth)
+	}
+
+	return logFile, int(currentMonth)
+}
+
 func (m *rikuganService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
@@ -39,15 +68,9 @@ func (m *rikuganService) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	// Set up logging to file since we can't use stdout as a service
 	logDir := filepath.Join(dataDir, "logs")
-	os.MkdirAll(logDir, 0755)
-	logFile, err := os.OpenFile(
-		filepath.Join(logDir, "agent.log"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0644,
-	)
-	if err == nil {
+	logFile, currentMonth := openLogFile(logDir)
+	if logFile != nil {
 		log.SetOutput(logFile)
-		defer logFile.Close()
 	}
 
 	elog.Info(1, fmt.Sprintf("Starting Rikugan agent service, connecting to %s", m.serverURL))
@@ -66,6 +89,10 @@ func (m *rikuganService) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
+	// Ticker to check for monthly log rotation
+	rotationTicker := time.NewTicker(1 * time.Hour)
+	defer rotationTicker.Stop()
+
 	for {
 		select {
 		case c := <-r:
@@ -77,15 +104,33 @@ func (m *rikuganService) Execute(args []string, r <-chan svc.ChangeRequest, chan
 			case svc.Stop, svc.Shutdown:
 				elog.Info(1, "Service stop requested")
 				log.Println("Service stop requested")
+				if logFile != nil {
+					logFile.Close()
+				}
 				changes <- svc.Status{State: svc.StopPending}
-				// Agent doesn't have graceful shutdown, just exit
 				return
 			default:
 				elog.Error(1, fmt.Sprintf("Unexpected control request #%d", c))
 			}
+		case <-rotationTicker.C:
+			// Check if month changed and rotate log if needed
+			if int(time.Now().Month()) != currentMonth {
+				log.Println("Rotating log file for new month")
+				if logFile != nil {
+					logFile.Close()
+				}
+				logFile, currentMonth = openLogFile(logDir)
+				if logFile != nil {
+					log.SetOutput(logFile)
+					log.Println("Log rotation complete")
+				}
+			}
 		case <-done:
 			// Agent exited unexpectedly
 			elog.Error(1, "Agent exited unexpectedly")
+			if logFile != nil {
+				logFile.Close()
+			}
 			return
 		}
 	}
