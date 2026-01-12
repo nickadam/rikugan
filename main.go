@@ -965,6 +965,7 @@ func (s *Server) Run() {
 
 	fmt.Println("========================================")
 	fmt.Println("Rikugan Server")
+	fmt.Println("github.com/nickadam/rikugan")
 	fmt.Println("========================================")
 	fmt.Printf("Port: %d\n", s.config.Port)
 	fmt.Printf("Admin Token: %s\n", s.config.AdminToken)
@@ -1116,6 +1117,7 @@ func (a *AgentState) connect() error {
 func (a *AgentState) Run() {
 	fmt.Println("========================================")
 	fmt.Println("Rikugan Agent")
+	fmt.Println("github.com/nickadam/rikugan")
 	fmt.Println("========================================")
 	fmt.Printf("Agent ID: %s\n", a.id)
 	fmt.Printf("OS: %s\n", runtime.GOOS)

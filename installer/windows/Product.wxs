@@ -33,6 +33,9 @@
       <ComponentGroupRef Id="DataFolderComponents" />
     </Feature>
 
+    <!-- License file for the license agreement dialog -->
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
     <!-- Custom UI with configuration dialog -->
     <UI Id="CustomInstallUI">
       <UIRef Id="WixUI_Common" />
@@ -54,20 +57,25 @@
       <DialogRef Id="ProgressDlg" />
       <DialogRef Id="ResumeDlg" />
       <DialogRef Id="UserExit" />
+      <DialogRef Id="LicenseAgreementDlg" />
 
-      <!-- Dialog flow -->
+      <!-- Dialog flow: Welcome -> License -> InstallDir -> ServerConfig -> VerifyReady -->
       <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath" Order="3">
         1</Publish>
       <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4"><![CDATA[WIXUI_INSTALLDIR_VALID<>"1"]]></Publish>
 
       <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999">1</Publish>
 
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg">NOT
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="LicenseAgreementDlg">NOT
         Installed</Publish>
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg">Installed
         AND PATCH</Publish>
 
-      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg">LicenseAccepted
+        = "1"</Publish>
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
       <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath"
         Value="[WIXUI_INSTALLDIR]" Order="1">1</Publish>
       <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath"
@@ -174,7 +182,7 @@
           Source="$(var.BuildDir)\rikugan.exe"
           KeyPath="yes" />
 
-          <ServiceInstall Id="ServiceInstaller"
+        <ServiceInstall Id="ServiceInstaller"
           Type="ownProcess"
           Name="RikuganAgent"
           DisplayName="Rikugan Agent"
