@@ -35,25 +35,29 @@ type Command struct {
 
 // CommandResult represents the result of a command execution
 type CommandResult struct {
-	AgentID       string  `json:"agent_id"`
-	CommandID     string  `json:"command_id"`
-	Command       string  `json:"command"`
-	Stdout        string  `json:"stdout"`
-	Stderr        string  `json:"stderr"`
-	ReturnCode    int     `json:"return_code"`
-	StartTime     string  `json:"start_time"`
-	ExecutionTime float64 `json:"execution_time_sec"`
+	AgentID        string  `json:"agent_id"`
+	CommandID      string  `json:"command_id"`
+	Command        string  `json:"command"`
+	Stdout         string  `json:"stdout"`
+	Stderr         string  `json:"stderr"`
+	ReturnCode     int     `json:"return_code"`
+	StartTime      string  `json:"start_time"`
+	ExecutionTime  float64 `json:"execution_time_sec"`
+	RemoteAddr     string  `json:"remote_addr,omitempty"`
+	XForwardedFor  string  `json:"x_forwarded_for,omitempty"`
 }
 
 // Agent represents a connected agent
 type Agent struct {
-	ID          string `json:"id"`
-	OS          string `json:"os"`
-	ConnectedAt string `json:"connected_at"`
-	LastSeen    string `json:"last_seen"`
-	Connected   bool   `json:"connected"`
-	conn        *websocket.Conn
-	mu          sync.Mutex
+	ID            string `json:"id"`
+	OS            string `json:"os"`
+	ConnectedAt   string `json:"connected_at"`
+	LastSeen      string `json:"last_seen"`
+	Connected     bool   `json:"connected"`
+	RemoteAddr    string `json:"remote_addr,omitempty"`
+	XForwardedFor string `json:"x_forwarded_for,omitempty"`
+	conn          *websocket.Conn
+	mu            sync.Mutex
 }
 
 // SyncFile represents a file available for sync
@@ -819,14 +823,20 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get remote address and X-Forwarded-For header
+	remoteAddr := r.RemoteAddr
+	xForwardedFor := r.Header.Get("X-Forwarded-For")
+
 	now := nowISO8601()
 	agent := &Agent{
-		ID:          agentID,
-		OS:          agentOS,
-		ConnectedAt: now,
-		LastSeen:    now,
-		Connected:   true,
-		conn:        conn,
+		ID:            agentID,
+		OS:            agentOS,
+		ConnectedAt:   now,
+		LastSeen:      now,
+		Connected:     true,
+		RemoteAddr:    remoteAddr,
+		XForwardedFor: xForwardedFor,
+		conn:          conn,
 	}
 
 	s.agentsMu.Lock()
@@ -873,6 +883,8 @@ func (s *Server) handleAgentMessages(agent *Agent) {
 			var result CommandResult
 			if err := json.Unmarshal(msg.Payload, &result); err == nil {
 				result.AgentID = agent.ID
+				result.RemoteAddr = agent.RemoteAddr
+				result.XForwardedFor = agent.XForwardedFor
 				s.logResult(result)
 				log.Printf("Result from %s: command=%s, rc=%d", agent.ID, result.CommandID, result.ReturnCode)
 
