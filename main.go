@@ -269,13 +269,12 @@ func (s *Server) openResultLog() {
 		log.Fatalf("Failed to open result log: %v", err)
 	}
 	s.resultLog = f
-	s.gzWriter = gzip.NewWriter(f)
 	s.logStartTime = time.Now().UTC()
 	s.currentLogDay = time.Now().UTC().YearDay()
 }
 
 func (s *Server) currentLogPath() string {
-	return filepath.Join(s.dataDir, "results.json.gz")
+	return filepath.Join(s.dataDir, "results.json")
 }
 
 func (s *Server) rotatedLogPath(t time.Time) string {
@@ -293,9 +292,8 @@ func (s *Server) logResult(result CommandResult) {
 	}
 
 	data, _ := json.Marshal(result)
-	s.gzWriter.Write(data)
-	s.gzWriter.Write([]byte("\n"))
-	s.gzWriter.Flush()
+	s.resultLog.Write(data)
+	s.resultLog.Write([]byte("\n"))
 	s.resultLog.Sync()
 }
 
@@ -326,21 +324,22 @@ func (s *Server) shouldRotate() bool {
 
 func (s *Server) rotateLogLocked() {
 	// Close current log
-	if s.gzWriter != nil {
-		s.gzWriter.Close()
-	}
 	if s.resultLog != nil {
 		s.resultLog.Close()
 	}
 
-	// Rename current log with timestamp
+	// Compress and rename current log with timestamp
 	currentPath := s.currentLogPath()
 	if _, err := os.Stat(currentPath); err == nil {
 		rotatedPath := s.rotatedLogPath(s.logStartTime)
-		if err := os.Rename(currentPath, rotatedPath); err != nil {
-			log.Printf("Error rotating log: %v", err)
+
+		// Compress the file
+		if err := compressFile(currentPath, rotatedPath); err != nil {
+			log.Printf("Error compressing log: %v", err)
 		} else {
-			log.Printf("Rotated log to: %s", filepath.Base(rotatedPath))
+			// Remove the uncompressed original
+			os.Remove(currentPath)
+			log.Printf("Rotated and compressed log to: %s", filepath.Base(rotatedPath))
 		}
 	}
 
@@ -349,6 +348,27 @@ func (s *Server) rotateLogLocked() {
 
 	// Clean up old logs
 	s.cleanupOldLogs()
+}
+
+// compressFile compresses src to dst using gzip
+func compressFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	gzWriter := gzip.NewWriter(dstFile)
+	defer gzWriter.Close()
+
+	_, err = io.Copy(gzWriter, srcFile)
+	return err
 }
 
 func (s *Server) cleanupOldLogs() {
