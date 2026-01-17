@@ -1147,6 +1147,9 @@ func (a *AgentState) connect() error {
 }
 
 func (a *AgentState) Run() {
+	// Set RIKUGAN_SYNC_DIR environment variable so all child processes can access it
+	os.Setenv("RIKUGAN_SYNC_DIR", a.syncDir)
+
 	fmt.Println("========================================")
 	fmt.Println("Rikugan Agent")
 	fmt.Println("github.com/nickadam/rikugan")
@@ -1158,6 +1161,7 @@ func (a *AgentState) Run() {
 	fmt.Printf("Data Directory: %s\n", a.dataDir)
 	fmt.Printf("  State: %s\n", a.stateDir)
 	fmt.Printf("  Sync:  %s\n", a.syncDir)
+	fmt.Printf("  Env:   RIKUGAN_SYNC_DIR=%s\n", a.syncDir)
 	fmt.Println("========================================")
 
 	for {
