@@ -829,21 +829,33 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for existing connected agent with same ID
-	s.agentsMu.RLock()
+	s.agentsMu.Lock()
 	existingAgent, exists := s.agents[agentID]
-	s.agentsMu.RUnlock()
-
 	if exists && existingAgent.Connected {
-		log.Printf("Rejecting duplicate agent connection: %s (already connected)", agentID)
-		http.Error(w, "Agent ID already connected. Use -agent-id to specify a unique ID.", http.StatusConflict)
-		return
+		// Close the old connection to allow reconnection
+		// This handles cases where network connectivity was lost but server didn't detect it
+		log.Printf("Closing stale connection for agent %s to allow reconnection", agentID)
+		existingAgent.mu.Lock()
+		existingAgent.Connected = false
+		if existingAgent.conn != nil {
+			existingAgent.conn.Close()
+		}
+		existingAgent.mu.Unlock()
 	}
+	s.agentsMu.Unlock()
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Upgrade error: %v", err)
 		return
 	}
+
+	// Set up ping/pong handlers for connection health monitoring
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 
 	// Get remote address and X-Forwarded-For header
 	remoteAddr := r.RemoteAddr
@@ -872,8 +884,31 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	// Send file list
 	s.sendFileListToAgent(agent)
 
+	// Start ping goroutine to keep connection alive and detect dead connections
+	go s.pingAgent(agent)
+
 	// Handle incoming messages
 	go s.handleAgentMessages(agent)
+}
+
+func (s *Server) pingAgent(agent *Agent) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		agent.mu.Lock()
+		if !agent.Connected || agent.conn == nil {
+			agent.mu.Unlock()
+			return
+		}
+		err := agent.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second))
+		agent.mu.Unlock()
+
+		if err != nil {
+			log.Printf("Ping failed for agent %s: %v", agent.ID, err)
+			return
+		}
+	}
 }
 
 func (s *Server) handleAgentMessages(agent *Agent) {
