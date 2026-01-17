@@ -35,16 +35,16 @@ type Command struct {
 
 // CommandResult represents the result of a command execution
 type CommandResult struct {
-	AgentID        string  `json:"agent_id"`
-	CommandID      string  `json:"command_id"`
-	Command        string  `json:"command"`
-	Stdout         string  `json:"stdout"`
-	Stderr         string  `json:"stderr"`
-	ReturnCode     int     `json:"return_code"`
-	StartTime      string  `json:"start_time"`
-	ExecutionTime  float64 `json:"execution_time_sec"`
-	RemoteAddr     string  `json:"remote_addr,omitempty"`
-	XForwardedFor  string  `json:"x_forwarded_for,omitempty"`
+	AgentID       string  `json:"agent_id"`
+	CommandID     string  `json:"command_id"`
+	Command       string  `json:"command"`
+	Stdout        string  `json:"stdout"`
+	Stderr        string  `json:"stderr"`
+	ReturnCode    int     `json:"return_code"`
+	StartTime     string  `json:"start_time"`
+	ExecutionTime float64 `json:"execution_time_sec"`
+	RemoteAddr    string  `json:"remote_addr,omitempty"`
+	XForwardedFor string  `json:"x_forwarded_for,omitempty"`
 }
 
 // Agent represents a connected agent
@@ -1223,6 +1223,17 @@ func (a *AgentState) handleMessages() {
 					commands[cmd.ID] = cmd
 				}
 				commandsMu.Unlock()
+
+				// Clean up lastRun entries for deleted commands
+				a.lastRunMu.Lock()
+				for cmdID := range a.lastRun {
+					if _, exists := commands[cmdID]; !exists {
+						delete(a.lastRun, cmdID)
+						log.Printf("Cleaned up deleted command: %s", cmdID)
+					}
+				}
+				a.lastRunMu.Unlock()
+
 				log.Printf("Received %d commands", len(payload.Commands))
 			}
 
@@ -1394,7 +1405,33 @@ func (a *AgentState) sendResult(result CommandResult) {
 }
 
 func (a *AgentState) syncFiles(serverFiles []SyncFile) {
-	// Check which files we need
+	// Build a map of server files for quick lookup
+	serverFileMap := make(map[string]SyncFile)
+	for _, sf := range serverFiles {
+		serverFileMap[sf.Name] = sf
+	}
+
+	// Check local files and delete any that don't exist on server
+	entries, err := os.ReadDir(a.syncDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			filename := entry.Name()
+			// If file exists locally but not on server, delete it
+			if _, exists := serverFileMap[filename]; !exists {
+				localPath := filepath.Join(a.syncDir, filename)
+				if err := os.Remove(localPath); err == nil {
+					log.Printf("Deleted file (removed from server): %s", filename)
+				} else {
+					log.Printf("Error deleting file %s: %v", filename, err)
+				}
+			}
+		}
+	}
+
+	// Check which files we need to download or update
 	for _, sf := range serverFiles {
 		localPath := filepath.Join(a.syncDir, sf.Name)
 		needSync := false
