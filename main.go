@@ -1286,17 +1286,11 @@ func (a *AgentState) executeCommand(cmd Command) {
 	startTime := time.Now()
 	startTimeISO := startTime.UTC().Format(time.RFC3339)
 
-	// Trim any whitespace from the command
-	cmdStr := strings.TrimSpace(cmd.Command)
-
 	var execCmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		// Append a no-op to handle trailing backslashes which cmd.exe
-		// interprets as escape characters
-		cmdStr = cmdStr + " && cd ."
-		execCmd = exec.Command("cmd", "/C", cmdStr)
+		execCmd = exec.Command("cmd", "/C", cmd.Command)
 	} else {
-		execCmd = exec.Command("sh", "-c", cmdStr)
+		execCmd = exec.Command("sh", "-c", cmd.Command)
 	}
 
 	var stdout, stderr strings.Builder
@@ -1333,9 +1327,6 @@ func (a *AgentState) executeAdHocCommand(cmd AdHocCommand) {
 	startTime := time.Now()
 	startTimeISO := startTime.UTC().Format(time.RFC3339)
 
-	// Trim any whitespace from the command
-	cmdStr := strings.TrimSpace(cmd.Command)
-
 	var stdout, stderr strings.Builder
 	var execCmd *exec.Cmd
 	var err error
@@ -1349,18 +1340,62 @@ func (a *AgentState) executeAdHocCommand(cmd AdHocCommand) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
+	// Create a temp file for the script to avoid shell parsing issues
+	var tempFile *os.File
+	var tempPath string
+
 	if runtime.GOOS == "windows" {
-		// Append a no-op to handle trailing backslashes which cmd.exe
-		// interprets as escape characters
-		cmdStr = cmdStr + " && cd ."
-		execCmd = exec.CommandContext(ctx, "cmd", "/C", cmdStr)
+		tempFile, err = os.CreateTemp("", "rikugan-*.bat")
+		if err != nil {
+			stderr.WriteString("Failed to create temp script file: " + err.Error())
+			result := CommandResult{
+				CommandID:     cmd.ID,
+				Command:       cmd.Command,
+				Stdout:        "",
+				Stderr:        stderr.String(),
+				ReturnCode:    -1,
+				StartTime:     startTimeISO,
+				ExecutionTime: time.Since(startTime).Seconds(),
+			}
+			a.sendResult(result)
+			return
+		}
+		tempPath = tempFile.Name()
+		tempFile.WriteString("@echo off\r\n")
+		tempFile.WriteString(cmd.Command)
+		tempFile.Close()
+		defer os.Remove(tempPath)
+
+		execCmd = exec.CommandContext(ctx, "cmd", "/C", tempPath)
 	} else {
-		execCmd = exec.CommandContext(ctx, "sh", "-c", cmdStr)
+		tempFile, err = os.CreateTemp("", "rikugan-*.sh")
+		if err != nil {
+			stderr.WriteString("Failed to create temp script file: " + err.Error())
+			result := CommandResult{
+				CommandID:     cmd.ID,
+				Command:       cmd.Command,
+				Stdout:        "",
+				Stderr:        stderr.String(),
+				ReturnCode:    -1,
+				StartTime:     startTimeISO,
+				ExecutionTime: time.Since(startTime).Seconds(),
+			}
+			a.sendResult(result)
+			return
+		}
+		tempPath = tempFile.Name()
+		tempFile.WriteString("#!/bin/sh\n")
+		tempFile.WriteString(cmd.Command)
+		tempFile.Close()
+		os.Chmod(tempPath, 0700)
+		defer os.Remove(tempPath)
+
+		execCmd = exec.CommandContext(ctx, "/bin/sh", tempPath)
 	}
 	execCmd.Stdout = &stdout
 	execCmd.Stderr = &stderr
 
-	log.Printf("Executing ad-hoc command: [%s]", cmdStr)
+	log.Printf("Executing ad-hoc command: [%s]", cmd.Command)
 	err = execCmd.Run()
 	executionTime := time.Since(startTime).Seconds()
 
