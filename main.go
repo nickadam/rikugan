@@ -170,6 +170,8 @@ type AgentState struct {
 	syncDir    string // Directory for synced files
 	lastRun    map[string]time.Time
 	lastRunMu  sync.Mutex
+	commands   map[string]Command // Persisted commands
+	commandsMu sync.RWMutex
 	conn       *websocket.Conn
 	connMu     sync.Mutex
 }
@@ -1173,7 +1175,7 @@ func NewAgent(serverURL, agentToken, agentID, dataDir string) *AgentState {
 		}
 	}
 
-	return &AgentState{
+	a := &AgentState{
 		id:         agentID,
 		serverURL:  serverURL,
 		agentToken: agentToken,
@@ -1181,7 +1183,48 @@ func NewAgent(serverURL, agentToken, agentID, dataDir string) *AgentState {
 		stateDir:   stateDir,
 		syncDir:    syncDir,
 		lastRun:    make(map[string]time.Time),
+		commands:   make(map[string]Command),
 	}
+
+	// Load persisted commands
+	a.loadAgentCommands()
+
+	return a
+}
+
+func (a *AgentState) loadAgentCommands() {
+	path := filepath.Join(a.stateDir, "commands.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var commands []Command
+	if err := json.Unmarshal(data, &commands); err != nil {
+		log.Printf("Error loading agent commands: %v", err)
+		return
+	}
+	a.commandsMu.Lock()
+	for _, cmd := range commands {
+		a.commands[cmd.ID] = cmd
+	}
+	a.commandsMu.Unlock()
+	log.Printf("Loaded %d commands from disk", len(commands))
+}
+
+func (a *AgentState) saveAgentCommands() error {
+	a.commandsMu.RLock()
+	commands := make([]Command, 0, len(a.commands))
+	for _, cmd := range a.commands {
+		commands = append(commands, cmd)
+	}
+	a.commandsMu.RUnlock()
+
+	data, err := json.MarshalIndent(commands, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(a.stateDir, "commands.json")
+	return os.WriteFile(path, data, 0644)
 }
 
 func (a *AgentState) connect() error {
@@ -1223,6 +1266,10 @@ func (a *AgentState) Run() {
 	fmt.Printf("  Env:   RIKUGAN_SYNC_DIR=%s\n", a.syncDir)
 	fmt.Println("========================================")
 
+	// Start command executor goroutine - runs independently of connection
+	// This ensures commands continue to run even when disconnected from server
+	go a.runCommandExecutor()
+
 	for {
 		if err := a.connect(); err != nil {
 			log.Printf("Connection failed: %v, retrying in 5s...", err)
@@ -1237,26 +1284,22 @@ func (a *AgentState) Run() {
 	}
 }
 
-func (a *AgentState) handleMessages() {
-	commands := make(map[string]Command)
-	var commandsMu sync.RWMutex
+func (a *AgentState) runCommandExecutor() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
-	// Command executor goroutine
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			commandsMu.RLock()
-			for _, cmd := range commands {
-				if a.shouldRunCommand(cmd) {
-					go a.executeCommand(cmd)
-				}
+	for range ticker.C {
+		a.commandsMu.RLock()
+		for _, cmd := range a.commands {
+			if a.shouldRunCommand(cmd) {
+				go a.executeCommand(cmd)
 			}
-			commandsMu.RUnlock()
 		}
-	}()
+		a.commandsMu.RUnlock()
+	}
+}
 
+func (a *AgentState) handleMessages() {
 	for {
 		a.connMu.Lock()
 		conn := a.conn
@@ -1280,24 +1323,32 @@ func (a *AgentState) handleMessages() {
 		case "commands":
 			var payload CommandListPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err == nil {
-				commandsMu.Lock()
-				commands = make(map[string]Command)
+				// Update the shared commands map
+				a.commandsMu.Lock()
+				a.commands = make(map[string]Command)
 				for _, cmd := range payload.Commands {
-					commands[cmd.ID] = cmd
+					a.commands[cmd.ID] = cmd
 				}
-				commandsMu.Unlock()
+				a.commandsMu.Unlock()
+
+				// Persist commands to disk so they survive restarts
+				if err := a.saveAgentCommands(); err != nil {
+					log.Printf("Error saving commands: %v", err)
+				}
 
 				// Clean up lastRun entries for deleted commands
 				a.lastRunMu.Lock()
+				a.commandsMu.RLock()
 				for cmdID := range a.lastRun {
-					if _, exists := commands[cmdID]; !exists {
+					if _, exists := a.commands[cmdID]; !exists {
 						delete(a.lastRun, cmdID)
 						log.Printf("Cleaned up deleted command: %s", cmdID)
 					}
 				}
+				a.commandsMu.RUnlock()
 				a.lastRunMu.Unlock()
 
-				log.Printf("Received %d commands", len(payload.Commands))
+				log.Printf("Received %d commands (persisted to disk)", len(payload.Commands))
 			}
 
 		case "exec":
