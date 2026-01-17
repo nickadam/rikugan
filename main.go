@@ -200,6 +200,8 @@ func NewServer(port int, dataDir string, adminToken, agentToken string, logRotat
 
 	syncDir := filepath.Join(dataDir, "sync")
 	os.MkdirAll(syncDir, 0755)
+	os.MkdirAll(filepath.Join(syncDir, "linux"), 0755)
+	os.MkdirAll(filepath.Join(syncDir, "windows"), 0755)
 	os.MkdirAll(dataDir, 0755)
 
 	now := time.Now().UTC()
@@ -562,10 +564,17 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	// Get OS type from query parameter (required for all operations)
+	osType := r.URL.Query().Get("os")
+	if osType != "linux" && osType != "windows" {
+		http.Error(w, "os parameter required (linux or windows)", http.StatusBadRequest)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		// List files
-		files := s.listSyncFiles()
+		// List files for the specified OS
+		files := s.listSyncFiles(osType)
 		json.NewEncoder(w).Encode(files)
 
 	case http.MethodPost:
@@ -582,7 +591,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		defer file.Close()
 
 		filename := filepath.Base(header.Filename)
-		destPath := filepath.Join(s.syncDir, filename)
+		destPath := filepath.Join(s.syncDir, osType, filename)
 		dest, err := os.Create(destPath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -593,7 +602,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		io.Copy(dest, file)
 		s.broadcastFileList()
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"uploaded": filename})
+		json.NewEncoder(w).Encode(map[string]string{"uploaded": filename, "os": osType})
 
 	case http.MethodDelete:
 		filename := r.URL.Query().Get("filename")
@@ -604,7 +613,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 		// Sanitize filename to prevent directory traversal
 		filename = filepath.Base(filename)
-		filePath := filepath.Join(s.syncDir, filename)
+		filePath := filepath.Join(s.syncDir, osType, filename)
 
 		if err := os.Remove(filePath); err != nil {
 			if os.IsNotExist(err) {
@@ -617,7 +626,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 		s.broadcastFileList()
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"deleted": filename})
+		json.NewEncoder(w).Encode(map[string]string{"deleted": filename, "os": osType})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -625,6 +634,12 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	osType := r.URL.Query().Get("os")
+	if osType != "linux" && osType != "windows" {
+		http.Error(w, "os parameter required (linux or windows)", http.StatusBadRequest)
+		return
+	}
+
 	filename := r.URL.Query().Get("filename")
 	if filename == "" {
 		http.Error(w, "filename required", http.StatusBadRequest)
@@ -633,7 +648,7 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Sanitize filename
 	filename = filepath.Base(filename)
-	filePath := filepath.Join(s.syncDir, filename)
+	filePath := filepath.Join(s.syncDir, osType, filename)
 
 	http.ServeFile(w, r, filePath)
 }
@@ -768,9 +783,16 @@ func (s *Server) sendAdHocCommandToAgent(agent *Agent, cmd AdHocCommand) error {
 	return agent.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (s *Server) listSyncFiles() []SyncFile {
+func (s *Server) listSyncFiles(osType string) []SyncFile {
 	files := make([]SyncFile, 0)
-	entries, err := os.ReadDir(s.syncDir)
+
+	// Validate OS type
+	if osType != "linux" && osType != "windows" {
+		return files
+	}
+
+	osDir := filepath.Join(s.syncDir, osType)
+	entries, err := os.ReadDir(osDir)
 	if err != nil {
 		return files
 	}
@@ -928,7 +950,8 @@ func (s *Server) sendCommandsToAgent(agent *Agent) {
 }
 
 func (s *Server) sendFileListToAgent(agent *Agent) {
-	files := s.listSyncFiles()
+	// Send files filtered by agent's OS
+	files := s.listSyncFiles(agent.OS)
 	payload, _ := json.Marshal(SyncFileListPayload{Files: files})
 	msg := WSMessage{Type: "files", Payload: payload}
 	data, _ := json.Marshal(msg)
@@ -940,7 +963,8 @@ func (s *Server) sendFileListToAgent(agent *Agent) {
 
 func (s *Server) sendFileToAgent(agent *Agent, filename string) {
 	filename = filepath.Base(filename)
-	filePath := filepath.Join(s.syncDir, filename)
+	// Read from OS-specific subdirectory
+	filePath := filepath.Join(s.syncDir, agent.OS, filename)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -1025,15 +1049,15 @@ func (s *Server) Run() {
 	}
 	fmt.Println("========================================")
 	fmt.Println("API Endpoints (require admin_token):")
-	fmt.Println("  GET    /api/commands         - List commands")
-	fmt.Println("  POST   /api/commands         - Add command")
-	fmt.Println("  DELETE /api/commands?id=X    - Delete command")
-	fmt.Println("  GET    /api/agents           - List agents")
-	fmt.Println("  POST   /api/exec             - Execute ad-hoc command")
-	fmt.Println("  GET    /api/files            - List sync files")
-	fmt.Println("  POST   /api/files            - Upload file")
-	fmt.Println("  DELETE /api/files?filename=X - Delete file")
-	fmt.Println("  GET    /api/files/download   - Download file")
+	fmt.Println("  GET    /api/commands              - List commands")
+	fmt.Println("  POST   /api/commands              - Add command")
+	fmt.Println("  DELETE /api/commands?id=X         - Delete command")
+	fmt.Println("  GET    /api/agents                - List agents")
+	fmt.Println("  POST   /api/exec                  - Execute ad-hoc command")
+	fmt.Println("  GET    /api/files?os=X            - List sync files (os=linux|windows)")
+	fmt.Println("  POST   /api/files?os=X            - Upload file")
+	fmt.Println("  DELETE /api/files?os=X&filename=Y - Delete file")
+	fmt.Println("  GET    /api/files/download?os=X&filename=Y - Download file")
 	fmt.Println("========================================")
 	fmt.Println("Agent WebSocket: /ws/agent?agent_token=X&agent_id=Y&os=Z")
 	fmt.Println("========================================")

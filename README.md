@@ -8,7 +8,7 @@ A remote management and monitoring tool for device management. A single binary t
 - **WebSocket Communication**: Real-time bidirectional communication between server and agents
 - **Scheduled Commands**: Define commands with intervals; agents track execution times and run commands only when intervals elapse
 - **OS-Specific Commands**: Commands can target Linux, Windows, or all operating systems
-- **File Synchronization**: Sync scripts and installers between server and agents
+- **File Synchronization**: OS-specific file sync between server and agents (separate directories for Linux and Windows)
 - **Dual Authentication**: Separate tokens for admin API access and agent connections
 - **Persistent Storage**: Commands persist across server restarts
 - **Compressed Logging**: Command results logged in gzip-compressed JSON format
@@ -99,8 +99,20 @@ agent_data/
 ├── state/
 │   └── .agent-id    # Persistent unique agent ID
 └── sync/
-    └── (synced files from server)
+    └── (synced files from server, OS-specific)
 ```
+
+**Environment Variables:**
+
+The agent sets the following environment variable on startup, which is inherited by all child processes (scheduled and ad-hoc commands):
+
+| Variable | Description |
+|----------|-------------|
+| `RIKUGAN_SYNC_DIR` | Absolute path to the agent's sync directory |
+
+This allows commands to reference synced files without knowing the exact path:
+- Linux: `$RIKUGAN_SYNC_DIR/myscript.sh`
+- Windows: `%RIKUGAN_SYNC_DIR%\myscript.bat`
 
 **Agent ID Generation:**
 - If `-agent-id` is not specified, a unique ID is auto-generated as `hostname-xxxxxxxx`
@@ -269,9 +281,12 @@ Backslashes in JSON must be escaped. To send `dir c:\Windows`:
 
 ### Files
 
+Files are stored in OS-specific directories on the server. All file operations require the `os` parameter (`linux` or `windows`).
+
 #### List Files
 ```bash
-GET /api/files
+GET /api/files?os=linux
+GET /api/files?os=windows
 ```
 
 Response:
@@ -287,7 +302,7 @@ Response:
 
 #### Upload File
 ```bash
-POST /api/files
+POST /api/files?os=linux
 Content-Type: multipart/form-data
 
 file=@install-agent.sh
@@ -296,25 +311,27 @@ file=@install-agent.sh
 Response:
 ```json
 {
-  "uploaded": "install-agent.sh"
+  "uploaded": "install-agent.sh",
+  "os": "linux"
 }
 ```
 
 #### Delete File
 ```bash
-DELETE /api/files?filename=install-agent.sh
+DELETE /api/files?os=linux&filename=install-agent.sh
 ```
 
 Response:
 ```json
 {
-  "deleted": "install-agent.sh"
+  "deleted": "install-agent.sh",
+  "os": "linux"
 }
 ```
 
 #### Download File
 ```bash
-GET /api/files/download?filename=install-agent.sh
+GET /api/files/download?os=linux&filename=install-agent.sh
 ```
 
 ## Examples
@@ -420,18 +437,37 @@ curl -X POST "$SERVER/api/exec" \
     "wait": true
   }'
 
-# Upload a script for sync
-curl -X POST "$SERVER/api/files" \
+# Upload a script for Linux agents
+curl -X POST "$SERVER/api/files?os=linux" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -F "file=@./scripts/install-software.sh"
 
-# List synced files
-curl "$SERVER/api/files" \
+# Upload a script for Windows agents
+curl -X POST "$SERVER/api/files?os=windows" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "file=@./scripts/install-software.bat"
+
+# List synced files for Linux
+curl "$SERVER/api/files?os=linux" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
-# Delete a synced file
-curl -X DELETE "$SERVER/api/files?filename=old-script.sh" \
+# List synced files for Windows
+curl "$SERVER/api/files?os=windows" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Delete a synced file from Linux
+curl -X DELETE "$SERVER/api/files?os=linux&filename=old-script.sh" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Execute a synced script using RIKUGAN_SYNC_DIR environment variable
+curl -X POST "$SERVER/api/exec" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "workstation-001",
+    "command": "$RIKUGAN_SYNC_DIR/install-software.sh",
+    "wait": true
+  }'
 ```
 
 ### Systemd Service (Server)
@@ -478,12 +514,16 @@ WantedBy=multi-user.target
 ```
 data/
 ├── commands.json                      # Persisted command definitions
-├── results.json.gz                    # Current compressed command execution logs
+├── results.json                       # Current command execution logs
 ├── results-2024-01-15T00-00-00.json.gz  # Rotated log (when rotation enabled)
 ├── results-2024-01-14T00-00-00.json.gz  # Older rotated log
 └── sync/                              # Files for agent synchronization
-    ├── install.sh
-    └── setup.msi
+    ├── linux/                         # Files synced to Linux agents
+    │   ├── install.sh
+    │   └── monitor.sh
+    └── windows/                       # Files synced to Windows agents
+        ├── install.bat
+        └── setup.msi
 ```
 
 ### Result Log Format
