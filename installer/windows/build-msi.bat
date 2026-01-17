@@ -27,11 +27,23 @@ if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
 
 echo.
-echo Step 1: Building Go executable...
+echo Step 1: Generating Windows resources...
+echo.
+
+REM Generate Windows version info resource
+pushd %~dp0..\..
+go generate
+if errorlevel 1 (
+    echo ERROR: go generate failed
+    popd
+    exit /b 1
+)
+
+echo.
+echo Step 2: Building Go executable...
 echo.
 
 REM Build the Go executable for Windows
-pushd %~dp0..\..
 set GOOS=windows
 set GOARCH=amd64
 go build -ldflags "-s -w" -o "%BUILD_DIR%\rikugan.exe" .
@@ -43,7 +55,7 @@ if errorlevel 1 (
 popd
 
 echo.
-echo Step 2: Compiling WiX installer...
+echo Step 3: Compiling WiX installer...
 echo.
 
 REM Compile WiX source
@@ -60,7 +72,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Step 3: Linking MSI package...
+echo Step 4: Linking MSI package...
 echo.
 
 REM Link to create MSI

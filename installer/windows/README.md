@@ -2,64 +2,6 @@
 
 This directory contains tools to package and deploy the Rikugan agent on Windows.
 
-## Quick Start (No MSI Required)
-
-The fastest way to deploy the agent is using the PowerShell installer:
-
-### 1. Build the executable
-
-On your build machine (Windows, Linux, or macOS with Go installed):
-
-```bash
-# From the project root
-GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o rikugan.exe .
-```
-
-### 2. Deploy to target machine
-
-Copy these files to the target Windows machine:
-- `rikugan.exe`
-- `installer/windows/install-agent.ps1`
-- `installer/windows/install.bat` (optional, for easier command-line install)
-
-### 3. Install
-
-**Option A: Using PowerShell (recommended)**
-
-Run PowerShell as Administrator:
-
-```powershell
-.\install-agent.ps1 -ServerUrl "http://your-server:8080" -AgentToken "your-agent-token"
-
-# With custom agent ID:
-.\install-agent.ps1 -ServerUrl "http://your-server:8080" -AgentToken "your-agent-token" -AgentId "workstation-001"
-```
-
-**Option B: Using batch file**
-
-Run Command Prompt as Administrator:
-
-```cmd
-install.bat http://your-server:8080 your-agent-token
-install.bat http://your-server:8080 your-agent-token workstation-001
-```
-
-### 4. Verify installation
-
-```powershell
-# Check service status
-Get-Service RikuganAgent
-
-# View recent logs
-Get-EventLog -LogName Application -Source RikuganAgent -Newest 20
-```
-
-### 5. Uninstall
-
-```powershell
-.\install-agent.ps1 -Uninstall
-```
-
 ---
 
 ## MSI Installer (Enterprise Deployment)
@@ -70,7 +12,7 @@ For enterprise deployment via Group Policy, SCCM, or other management tools, you
 
 1. **WiX Toolset v3.x** - Download from [wixtoolset.org](https://wixtoolset.org/)
 2. **Go** - For building the executable
-3. **Windows** - MSI building must be done on Windows
+3. `go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest`
 
 ### Building the MSI
 
@@ -94,8 +36,7 @@ msiexec /i Rikugan-1.0.0-x64.msi
 ```cmd
 msiexec /i Rikugan-1.0.0-x64.msi /qn ^
     SERVER_URL="http://your-server:8080" ^
-    AGENT_TOKEN="your-agent-token" ^
-    AGENT_ID="workstation-001"
+    AGENT_TOKEN="your-agent-token"
 ```
 
 **Group Policy / SCCM deployment:**
@@ -103,7 +44,6 @@ msiexec /i Rikugan-1.0.0-x64.msi /qn ^
 Create a transform (.mst) file or use command-line properties:
 - `SERVER_URL` - Rikugan server URL
 - `AGENT_TOKEN` - Agent authentication token
-- `AGENT_ID` - Custom agent identifier (optional)
 
 ### Uninstalling
 
@@ -112,45 +52,6 @@ msiexec /x Rikugan-1.0.0-x64.msi /qn
 ```
 
 Or via Programs and Features in Control Panel.
-
----
-
-## Mass Deployment Script
-
-For deploying to multiple machines via PowerShell remoting:
-
-```powershell
-# deploy-agents.ps1
-$servers = @(
-    "workstation-001",
-    "workstation-002",
-    "workstation-003"
-)
-
-$serverUrl = "http://manager.example.com:8080"
-$agentToken = "your-agent-token"
-$installerPath = "\\fileserver\share\rikugan"
-
-foreach ($server in $servers) {
-    Write-Host "Deploying to $server..."
-
-    Invoke-Command -ComputerName $server -ScriptBlock {
-        param($url, $token, $path, $name)
-
-        # Copy files
-        Copy-Item "$path\rikugan.exe" "C:\Temp\" -Force
-        Copy-Item "$path\install-agent.ps1" "C:\Temp\" -Force
-
-        # Install
-        & "C:\Temp\install-agent.ps1" -ServerUrl $url -AgentToken $token -AgentId $name
-
-        # Cleanup
-        Remove-Item "C:\Temp\rikugan.exe" -Force
-        Remove-Item "C:\Temp\install-agent.ps1" -Force
-
-    } -ArgumentList $serverUrl, $agentToken, $installerPath, $server
-}
-```
 
 ---
 
@@ -246,27 +147,4 @@ New-NetFirewallRule -DisplayName "Rikugan Agent" `
 
 ```powershell
 Get-EventLog -LogName Application -Source RikuganAgent -Newest 50 | Format-List
-```
-
----
-
-## Customization
-
-### Change installation directory
-
-PowerShell:
-```powershell
-.\install-agent.ps1 -ServerUrl "..." -AgentToken "..." -InstallDir "D:\CustomPath\Rikugan"
-```
-
-MSI:
-```cmd
-msiexec /i Rikugan.msi INSTALLFOLDER="D:\CustomPath\Rikugan"
-```
-
-### Custom service account
-
-Modify the PowerShell installer or use `sc.exe` after installation:
-```cmd
-sc.exe config RikuganAgent obj= "DOMAIN\ServiceAccount" password= "password"
 ```
