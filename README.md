@@ -57,6 +57,42 @@ Or explicitly:
 | `-admin-token` | (auto-generated) | Token for admin API authentication |
 | `-agent-token` | (auto-generated) | Token for agent authentication |
 
+**Server Environment Variables:**
+
+The server supports configuration via environment variables. Command-line flags take precedence over environment variables.
+
+| Variable | Description |
+|----------|-------------|
+| `DATA_DIR` | Directory for persistent data (equivalent to `-data-dir`) |
+| `ADMIN_TOKEN` | Admin authentication token (equivalent to `-admin-token`) |
+| `ADMIN_TOKEN_FILE` | Path to file containing admin token (for secrets management) |
+| `AGENT_TOKEN` | Agent authentication token (equivalent to `-agent-token`) |
+| `AGENT_TOKEN_FILE` | Path to file containing agent token (for secrets management) |
+
+The `_FILE` variants are checked first, allowing integration with Docker secrets, Kubernetes secrets, or other secrets management systems. Example:
+
+```bash
+# Using environment variables directly
+export ADMIN_TOKEN="my-admin-token"
+export AGENT_TOKEN="my-agent-token"
+export DATA_DIR="/var/lib/rikugan"
+./rikugan
+
+# Using file-based secrets (e.g., Docker/Kubernetes secrets)
+export ADMIN_TOKEN_FILE="/run/secrets/admin_token"
+export AGENT_TOKEN_FILE="/run/secrets/agent_token"
+./rikugan
+```
+
+**Token Persistence:**
+
+When tokens are not provided via flags or environment variables, the server will:
+1. Check for existing tokens in `<data-dir>/.admin_token` and `<data-dir>/.agent_token`
+2. If found, load and reuse them
+3. If not found, generate new tokens and save them for future restarts
+
+This ensures tokens remain stable across server restarts without requiring explicit configuration.
+
 **Log Rotation Options:**
 | Flag | Default | Description |
 |------|---------|-------------|

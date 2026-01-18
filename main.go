@@ -1667,6 +1667,32 @@ func (a *AgentState) saveFile(filename string, b64data string) {
 
 // ==================== MAIN ====================
 
+// getEnvOrDefault returns the environment variable value if set, otherwise the default.
+func getEnvOrDefault(envVar, defaultVal string) string {
+	if val := os.Getenv(envVar); val != "" {
+		return val
+	}
+	return defaultVal
+}
+
+// getSecretFromEnv reads a secret from environment variables.
+// It checks ENV_VAR_FILE first (reads from file), then ENV_VAR directly.
+// Returns empty string if neither is set.
+func getSecretFromEnv(envVar string) string {
+	// Check for _FILE variant first (e.g., ADMIN_TOKEN_FILE)
+	if fileVar := os.Getenv(envVar + "_FILE"); fileVar != "" {
+		data, err := os.ReadFile(fileVar)
+		if err != nil {
+			log.Printf("Warning: could not read %s_FILE (%s): %v", envVar, fileVar, err)
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
+
+	// Fall back to direct environment variable
+	return os.Getenv(envVar)
+}
+
 func main() {
 	// Mode flags
 	serverMode := flag.Bool("server", false, "Run in server mode")
@@ -1699,6 +1725,23 @@ func main() {
 	}
 
 	if *serverMode {
+		// Apply environment variables for server configuration
+		// Command-line flags take precedence over environment variables
+		serverDataDir := *dataDir
+		if serverDataDir == "./data" { // only override if using default
+			serverDataDir = getEnvOrDefault("DATA_DIR", serverDataDir)
+		}
+
+		serverAdminToken := *adminToken
+		if serverAdminToken == "" {
+			serverAdminToken = getSecretFromEnv("ADMIN_TOKEN")
+		}
+
+		serverAgentToken := *agentTokenFlag
+		if serverAgentToken == "" {
+			serverAgentToken = getSecretFromEnv("AGENT_TOKEN")
+		}
+
 		logRotation := LogRotationConfig{
 			Enabled:     *logRotate,
 			RotateDaily: *logRotateDaily,
@@ -1706,7 +1749,7 @@ func main() {
 			MaxAgeDays:  *logMaxAgeDays,
 			MaxFiles:    *logMaxFiles,
 		}
-		server := NewServer(*port, *dataDir, *adminToken, *agentTokenFlag, logRotation)
+		server := NewServer(*port, serverDataDir, serverAdminToken, serverAgentToken, logRotation)
 		server.Run()
 	} else if *agentMode {
 		if *serverURL == "" {
