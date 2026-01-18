@@ -194,12 +194,41 @@ func parseISO8601(s string) (time.Time, error) {
 
 // ==================== SERVER ====================
 
+// loadOrGenerateToken loads a token from a file if it exists, otherwise generates
+// a new token and saves it to the file for persistence across restarts.
+func loadOrGenerateToken(dataDir, tokenName string) string {
+	tokenFile := filepath.Join(dataDir, "."+tokenName)
+
+	// Try to read existing token
+	if data, err := os.ReadFile(tokenFile); err == nil {
+		existingToken := strings.TrimSpace(string(data))
+		if existingToken != "" {
+			log.Printf("Loaded %s from disk", tokenName)
+			return existingToken
+		}
+	}
+
+	// Generate new token and persist it
+	token := generateToken()
+	if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
+		log.Printf("Warning: could not persist %s: %v", tokenName, err)
+	} else {
+		log.Printf("Generated and saved new %s", tokenName)
+	}
+
+	return token
+}
+
 func NewServer(port int, dataDir string, adminToken, agentToken string, logRotation LogRotationConfig) *Server {
+	// Ensure data directory exists before trying to load tokens
+	os.MkdirAll(dataDir, 0755)
+
+	// Load or generate tokens
 	if adminToken == "" {
-		adminToken = generateToken()
+		adminToken = loadOrGenerateToken(dataDir, "admin_token")
 	}
 	if agentToken == "" {
-		agentToken = generateToken()
+		agentToken = loadOrGenerateToken(dataDir, "agent_token")
 	}
 
 	syncDir := filepath.Join(dataDir, "sync")
