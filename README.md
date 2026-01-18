@@ -28,6 +28,10 @@ GOOS=darwin GOARCH=amd64 go build -o rikugan-darwin-amd64 .
 GOOS=darwin GOARCH=arm64 go build -o rikugan-darwin-arm64 .
 ```
 
+## Docker
+
+A docker image is available at nickadam/rikugan:latest
+
 ## Usage
 
 ### Server Mode
