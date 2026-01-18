@@ -1092,7 +1092,6 @@ func (s *Server) Run() {
 	fmt.Println("github.com/nickadam/rikugan")
 	fmt.Println("========================================")
 	fmt.Printf("Port: %d\n", s.config.Port)
-	fmt.Printf("Admin Token: %s\n", s.config.AdminToken)
 	fmt.Printf("Agent Token: %s\n", s.config.AgentToken)
 	fmt.Printf("Data Directory: %s\n", s.dataDir)
 	fmt.Printf("Sync Directory: %s\n", s.syncDir)
