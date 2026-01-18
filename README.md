@@ -98,8 +98,8 @@ This ensures tokens remain stable across server restarts without requiring expli
 |------|---------|-------------|
 | `-log-rotate` | false | Enable log rotation |
 | `-log-rotate-daily` | true | Rotate logs at midnight UTC |
-| `-log-max-size-mb` | 100 | Rotate when log exceeds this size (0 = no limit) |
-| `-log-max-age-days` | 30 | Delete logs older than this (0 = keep forever) |
+| `-log-max-size-mb` | 0 | Rotate when log exceeds this size (0 = no limit) |
+| `-log-max-age-days` | 0 | Delete logs older than this (0 = keep forever) |
 | `-log-max-files` | 0 | Max rotated files to keep (0 = unlimited) |
 
 **Example with log rotation:**

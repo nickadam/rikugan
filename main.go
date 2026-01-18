@@ -1706,8 +1706,8 @@ func main() {
 	// Log rotation flags
 	logRotate := flag.Bool("log-rotate", false, "Enable log rotation")
 	logRotateDaily := flag.Bool("log-rotate-daily", true, "Rotate logs daily at midnight UTC")
-	logMaxSizeMB := flag.Int("log-max-size-mb", 100, "Rotate when log exceeds this size in MB (0 = no size limit)")
-	logMaxAgeDays := flag.Int("log-max-age-days", 30, "Delete logs older than this many days (0 = keep forever)")
+	logMaxSizeMB := flag.Int("log-max-size-mb", 0, "Rotate when log exceeds this size in MB (0 = no size limit)")
+	logMaxAgeDays := flag.Int("log-max-age-days", 0, "Delete logs older than this many days (0 = keep forever)")
 	logMaxFiles := flag.Int("log-max-files", 0, "Maximum rotated log files to keep (0 = unlimited)")
 
 	// Agent flags
