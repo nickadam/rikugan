@@ -1,5 +1,7 @@
 # Rikugan
 
+https://github.com/nickadam/rikugan
+
 A remote management and monitoring tool for device management. A single binary that can run as either a server or an agent (client), with websocket communication, scheduled command execution, file synchronization, and comprehensive logging.
 
 ## Features
@@ -14,6 +16,10 @@ A remote management and monitoring tool for device management. A single binary t
 - **Compressed Logging**: Command results logged in gzip-compressed JSON format
 - **ISO 8601 Timestamps**: All times expressed in ISO 8601 format
 
+## Docker
+
+A docker image is available at https://hub.docker.com/r/nickadam/rikugan
+
 ## Building
 
 ```bash
@@ -27,10 +33,6 @@ GOOS=windows GOARCH=amd64 go build -o rikugan-windows-amd64.exe .
 GOOS=darwin GOARCH=amd64 go build -o rikugan-darwin-amd64 .
 GOOS=darwin GOARCH=arm64 go build -o rikugan-darwin-arm64 .
 ```
-
-## Docker
-
-A docker image is available at nickadam/rikugan:latest
 
 ## Usage
 
