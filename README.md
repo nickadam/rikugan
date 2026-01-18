@@ -13,8 +13,6 @@ A remote management and monitoring tool for device management. A single binary t
 - **File Synchronization**: OS-specific file sync between server and agents (separate directories for Linux and Windows)
 - **Dual Authentication**: Separate tokens for admin API access and agent connections
 - **Persistent Storage**: Commands persist across server restarts
-- **Compressed Logging**: Command results logged in gzip-compressed JSON format
-- **ISO 8601 Timestamps**: All times expressed in ISO 8601 format
 
 ## Docker
 
