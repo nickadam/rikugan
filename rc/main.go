@@ -315,10 +315,22 @@ func printExecResult(resp *AdHocCommandResponse) {
 	}
 }
 
+func printJSON(v interface{}) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
+var jsonOutput bool
+
 func main() {
 	// Global flags
 	serverURL := flag.String("server", "", "Rikugan server URL (or set RIKUGAN_SERVER)")
 	adminToken := flag.String("token", "", "Admin token (or set RIKUGAN_TOKEN)")
+	flag.BoolVar(&jsonOutput, "json", false, "Output results as JSON")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Rikugan Client - CLI for Rikugan Server\n\n")
@@ -326,6 +338,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Global Flags:\n")
 		fmt.Fprintf(os.Stderr, "  -server string    Server URL (or set RIKUGAN_SERVER env var)\n")
 		fmt.Fprintf(os.Stderr, "  -token string     Admin token (or set RIKUGAN_TOKEN env var)\n")
+		fmt.Fprintf(os.Stderr, "  -json             Output results as JSON (no truncation)\n")
 		fmt.Fprintf(os.Stderr, "\nCommands:\n")
 		fmt.Fprintf(os.Stderr, "  agents            List all agents\n")
 		fmt.Fprintf(os.Stderr, "  exec              Execute ad-hoc command on an agent\n")
@@ -386,7 +399,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if len(agents) == 0 {
+		if jsonOutput {
+			printJSON(agents)
+		} else if len(agents) == 0 {
 			fmt.Println("No agents found.")
 		} else {
 			printAgents(agents)
@@ -414,7 +429,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		printExecResult(resp)
+		if jsonOutput {
+			printJSON(resp)
+		} else {
+			printExecResult(resp)
+		}
 
 	case "commands":
 		commands, err := client.ListCommands()
@@ -422,7 +441,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if len(commands) == 0 {
+		if jsonOutput {
+			printJSON(commands)
+		} else if len(commands) == 0 {
 			fmt.Println("No commands found.")
 		} else {
 			printCommands(commands)
@@ -490,7 +511,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if len(files) == 0 {
+		if jsonOutput {
+			printJSON(files)
+		} else if len(files) == 0 {
 			fmt.Printf("No files found for %s.\n", *osType)
 		} else {
 			printFiles(files, *osType)
